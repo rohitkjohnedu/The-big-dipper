@@ -17,3 +17,6 @@ Code to control the dip coating process
     - Set delay
     - Set number of dip
     - progress bar
+
+# Remark
+- The code is written by claude code under my supervision
