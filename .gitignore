@@ -1,0 +1,19 @@
+# uv / Python
+python/.venv/
+**/__pycache__/
+*.pyc
+
+# Arduino build artifacts
+arduino/**/*.elf
+arduino/**/*.hex
+arduino/**/*.bin
+arduino/**/build/
+
+# Project runtime
+python/logs/
+python/profiles/*.json
+!python/profiles/default.json
+
+# OS
+.DS_Store
+Thumbs.db
