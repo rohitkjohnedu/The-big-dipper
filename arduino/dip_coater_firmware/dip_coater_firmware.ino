@@ -50,7 +50,19 @@ static void dispatchCommand(char* line) {
     while (len > 0 && (line[len-1] == '\r' || line[len-1] == '\n' || line[len-1] == ' '))
         line[--len] = '\0';
 
-    if (strcmp(line, "DIAG MOTOR") == 0) {
+    if (strcmp(line, "HELP") == 0 || strcmp(line, "DIAG CMD") == 0) {
+        Serial.println("--- Diagnostics commands ---");
+        Serial.println("  DIAG MOTOR            move down 5mm then up 5mm");
+        Serial.println("  DIAG MOTORENCODER     same + encoder pass/fail check");
+        Serial.println("  DIAG ENDSTOP          live endstop monitor (trigger manually)");
+        Serial.println("  DIAG MOVE <mm>        move by <mm> at 2mm/s, check encoder");
+        Serial.println("  DIAG JOG DOWN [spd]   continuous jog down at [spd] mm/s (default 5)");
+        Serial.println("  DIAG JOG UP   [spd]   continuous jog up   at [spd] mm/s (default 5)");
+        Serial.println("  DIAG JOG STOP         stop continuous jog");
+        Serial.println("  DIAG POS              print current position in mm");
+        Serial.println("  DIAG EXIT             stop any active test, return to idle");
+        Serial.println("  HELP                  show this list");
+    } else if (strcmp(line, "DIAG MOTOR") == 0) {
         diag.startMotorTest();
     } else if (strcmp(line, "DIAG MOTORENCODER") == 0) {
         diag.startMotorEncoderTest();
