@@ -13,6 +13,7 @@ Diagnostics::Diagnostics()
     , _lastTop(false), _lastBot(false)
     , _moveTestStartPos(0.0f), _moveTestDeltaMm(0.0f), _moveTestStart(0)
     , _checkEncoder(false)
+    , _calStartPos(0.0f), _calCommandedMm(0.0f), _calEncoderMm(0.0f), _calStart(0)
 {}
 
 void Diagnostics::begin(MotionController& mc, StateMachine& sm) {
@@ -99,6 +100,7 @@ void Diagnostics::update() {
     if (_mode == Mode::MOTOR_TEST)   updateMotorTest();
     if (_mode == Mode::ENDSTOP_TEST) updateEndstopTest();
     if (_mode == Mode::MOVE_TEST)    updateMoveTest();
+    if (_mode == Mode::CAL_MOVE)     updateCalMove();
 }
 
 // =============================================================================
@@ -222,28 +224,92 @@ void Diagnostics::updateMoveTest() {
     uint32_t now     = millis();
     uint32_t elapsed = now - _moveTestStart;
 
-    if (elapsed < SETTLE_MS) return;   // startup guard: let motion begin before polling
+    // getMotorState(STANDSTILL) is only briefly true after the motor stops and
+    // is unreliable for detecting move completion. Instead, wait the expected
+    // move duration then sample the encoder directly.
+    uint32_t expectedMs = (uint32_t)(fabsf(_moveTestDeltaMm) / DIAG_SPEED_MMS * 1000.0f) + 500UL;
+    if (elapsed < expectedMs) return;
 
-    bool timedOut = elapsed >= MOVE_TIMEOUT_MS;
+    // Encoder convention: negative = down. Negate for display (positive = down).
+    float actual        = _mc->getPositionMm() - _moveTestStartPos;
+    float displayActual = -actual;
 
-    if (!_mc->isMoveDone() && !timedOut) return;
-
-    float actual = _mc->getPositionMm() - _moveTestStartPos;
-
-    if (timedOut && !_mc->isMoveDone()) {
-        Serial.println("DIAG:MOVE:FAIL timeout - motor did not reach target");
-    } else {
-        bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
-        Serial.print("DIAG:MOVE:");
-        Serial.print(ok ? "PASS" : "FAIL");
-        Serial.print(" commanded=");
-        Serial.print(_moveTestDeltaMm, 1);
-        Serial.print("mm actual=");
-        Serial.print(actual, 1);
-        Serial.println("mm");
-    }
+    bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
+    Serial.print("DIAG:MOVE:");
+    Serial.print(ok ? "PASS" : "FAIL");
+    Serial.print(" commanded=");
+    Serial.print(_moveTestDeltaMm, 1);
+    Serial.print("mm actual=");
+    Serial.print(displayActual, 1);
+    Serial.println("mm");
 
     _mode = Mode::INACTIVE;
+}
+
+// =============================================================================
+// Calibration move — command a distance, measure encoder, report correction
+// =============================================================================
+
+void Diagnostics::startCalMove(float mm) {
+    _calCommandedMm = mm;
+    _calStartPos    = _mc->getPositionMm();
+    _calStart       = millis();
+    _calEncoderMm   = 0.0f;
+    _mode           = Mode::CAL_MOVE;
+    _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);
+    Serial.print("DIAG:CAL:START commanded=");
+    Serial.print(mm, 1);
+    Serial.print("mm at ");
+    Serial.print(CAL_SPEED_MMS, 0);
+    Serial.println("mm/s");
+}
+
+void Diagnostics::updateCalMove() {
+    uint32_t now     = millis();
+    uint32_t elapsed = now - _calStart;
+
+    uint32_t expectedMs = (uint32_t)(fabsf(_calCommandedMm) / CAL_SPEED_MMS * 1000.0f) + 1000UL;
+    if (elapsed < expectedMs) return;
+
+    float actual  = _mc->getPositionMm() - _calStartPos;
+    _calEncoderMm = -actual;   // positive = down (matches physical measurement direction)
+
+    Serial.print("DIAG:CAL:DONE encoder=");
+    Serial.print(_calEncoderMm, 2);
+    Serial.println("mm");
+    Serial.println("DIAG:CAL:Measure the actual displacement with calipers.");
+    Serial.println("DIAG:CAL:Then type: DIAG CAL RESULT <actual_mm>");
+
+    _mode = Mode::INACTIVE;
+}
+
+void Diagnostics::computeCalResult(float actualMm) {
+    if (fabsf(_calEncoderMm) < 1.0f) {
+        Serial.println("DIAG:CAL:ERR no calibration move recorded - run DIAG CAL <mm> first");
+        return;
+    }
+    // If encoder reads X mm but physical displacement is Y mm, the leadscrew
+    // pitch constant is off by a factor of Y/X. Scale LEADSCREW_MM_PER_REV accordingly.
+    float correction  = actualMm / _calEncoderMm;
+    float newMmPerRev = LEADSCREW_MM_PER_REV * correction;
+
+    Serial.print("DIAG:CAL:RESULT commanded=");
+    Serial.print(_calCommandedMm, 1);
+    Serial.print("mm encoder=");
+    Serial.print(_calEncoderMm, 2);
+    Serial.print("mm actual=");
+    Serial.print(actualMm, 2);
+    Serial.println("mm");
+    Serial.print("DIAG:CAL:correction=");
+    Serial.print(correction, 4);
+    if (fabsf(correction - 1.0f) < 0.01f) {
+        Serial.println(" (within 1% - no change needed)");
+    } else {
+        Serial.println();
+        Serial.print("DIAG:CAL:Update config.h: #define LEADSCREW_MM_PER_REV  ");
+        Serial.print(newMmPerRev, 4);
+        Serial.println("f");
+    }
 }
 
 // =============================================================================

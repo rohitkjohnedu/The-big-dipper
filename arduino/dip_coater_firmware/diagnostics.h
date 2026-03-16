@@ -17,7 +17,7 @@
 
 class Diagnostics {
 public:
-    enum class Mode : uint8_t { INACTIVE, MOTOR_TEST, ENDSTOP_TEST, JOG, MOVE_TEST };
+    enum class Mode : uint8_t { INACTIVE, MOTOR_TEST, ENDSTOP_TEST, JOG, MOVE_TEST, CAL_MOVE };
 
     Diagnostics();
     void begin(MotionController& mc, StateMachine& sm);
@@ -27,6 +27,8 @@ public:
     void startEndstopTest();
     void startJog(bool up, float speedMms);
     void startMoveTest(float mm);
+    void startCalMove(float mm);
+    void computeCalResult(float actualMm);
     void printPosition();
     void exit();
     void update();
@@ -80,9 +82,17 @@ private:
     void updateMotorTest();
     void updateEndstopTest();
     void updateMoveTest();
+    void updateCalMove();
+
+    // Calibration state — holds results across DIAG CAL RESULT
+    float    _calStartPos;
+    float    _calCommandedMm;
+    float    _calEncoderMm;    // encoder displacement, positive = down (for display)
+    uint32_t _calStart;
 
     // Test parameters — speeds kept low to limit current draw
     static constexpr float    DIAG_SPEED_MMS   =  2.0f;
+    static constexpr float    CAL_SPEED_MMS    = 10.0f;   // faster for calibration moves
     static constexpr float    DIAG_ACCEL_MMS2  =  5.0f;
     static constexpr float    DIAG_DIST_MM     =  5.0f;
     static constexpr float    TOLERANCE_MM     =  1.5f;

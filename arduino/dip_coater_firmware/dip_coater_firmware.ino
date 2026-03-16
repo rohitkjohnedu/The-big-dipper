@@ -52,16 +52,18 @@ static void dispatchCommand(char* line) {
 
     if (strcmp(line, "HELP") == 0 || strcmp(line, "DIAG CMD") == 0) {
         Serial.println("--- Diagnostics commands ---");
-        Serial.println("  DIAG MOTOR            move down 5mm then up 5mm");
-        Serial.println("  DIAG MOTORENCODER     same + encoder pass/fail check");
-        Serial.println("  DIAG ENDSTOP          live endstop monitor (trigger manually)");
-        Serial.println("  DIAG MOVE <mm>        move by <mm> at 2mm/s, check encoder");
-        Serial.println("  DIAG JOG DOWN [spd]   continuous jog down at [spd] mm/s (default 5)");
-        Serial.println("  DIAG JOG UP   [spd]   continuous jog up   at [spd] mm/s (default 5)");
-        Serial.println("  DIAG JOG STOP         stop continuous jog");
-        Serial.println("  DIAG POS              print current position in mm");
-        Serial.println("  DIAG EXIT             stop any active test, return to idle");
-        Serial.println("  HELP                  show this list");
+        Serial.println("  DIAG MOTOR              move down 5mm then up 5mm");
+        Serial.println("  DIAG MOTORENCODER       same + encoder pass/fail check");
+        Serial.println("  DIAG ENDSTOP            live endstop monitor (trigger manually)");
+        Serial.println("  DIAG MOVE <mm>          move by <mm>, check encoder");
+        Serial.println("  DIAG JOG DOWN [spd]     continuous jog down at [spd] mm/s (default 5)");
+        Serial.println("  DIAG JOG UP   [spd]     continuous jog up   at [spd] mm/s (default 5)");
+        Serial.println("  DIAG JOG STOP           stop continuous jog");
+        Serial.println("  DIAG POS                print current encoder position in mm");
+        Serial.println("  DIAG CAL <mm>           calibration move - use 50-100mm for best accuracy");
+        Serial.println("  DIAG CAL RESULT <mm>    enter measured distance, prints config.h correction");
+        Serial.println("  DIAG EXIT               stop any active test, return to idle");
+        Serial.println("  HELP                    show this list");
     } else if (strcmp(line, "DIAG MOTOR") == 0) {
         diag.startMotorTest();
     } else if (strcmp(line, "DIAG MOTORENCODER") == 0) {
@@ -83,6 +85,12 @@ static void dispatchCommand(char* line) {
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
         float mm = *(line + 9) ? atof(line + 9) : 10.0f;
         diag.startMoveTest(mm);
+    } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
+        float mm = *(line + 15) ? atof(line + 15) : 0.0f;
+        diag.computeCalResult(mm);
+    } else if (strncmp(line, "DIAG CAL", 8) == 0) {
+        float mm = *(line + 8) ? atof(line + 8) : 50.0f;
+        diag.startCalMove(mm);
     } else {
         // TODO step 6: forward to CommandParser
         Serial.print("ERR:unknown command: ");

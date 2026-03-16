@@ -16,12 +16,11 @@ float MotionController::mmToDeg(float mm) const {
     return mm * (360.0f / LEADSCREW_MM_PER_REV);
 }
 
-// Set velocity and acceleration on the stepper (steps/s and steps/s²)
+// Set velocity and acceleration. Library takes deg/s, not steps/s.
 void MotionController::setSpeed(float speedMms) {
-    float sps = speedMms * STEPS_PER_MM;
-    _stepper.setMaxVelocity(sps);
-    _stepper.setMaxAcceleration(_accelMms2 * STEPS_PER_MM);
-    _stepper.setMaxDeceleration(_accelMms2 * STEPS_PER_MM);
+    _stepper.setMaxVelocity(mmToDeg(speedMms));
+    _stepper.setMaxAcceleration(mmToDeg(_accelMms2));
+    _stepper.setMaxDeceleration(mmToDeg(_accelMms2));
 }
 
 // =============================================================================
@@ -93,9 +92,9 @@ void MotionController::executeHome() {
     _homingBackoffActive = false;
     _commandedVelocityMms = HOMING_SPEED_MM_S;
     // CCW = UP toward top endstop. Swap to CW if direction is inverted.
-    _stepper.setMaxVelocity(HOMING_SPEED_MM_S * STEPS_PER_MM);
-    _stepper.setMaxAcceleration(HOMING_SPEED_MM_S * STEPS_PER_MM);
-    _stepper.setMaxDeceleration(HOMING_SPEED_MM_S * STEPS_PER_MM);
+    _stepper.setMaxVelocity(mmToDeg(HOMING_SPEED_MM_S));
+    _stepper.setMaxAcceleration(mmToDeg(HOMING_SPEED_MM_S));
+    _stepper.setMaxDeceleration(mmToDeg(HOMING_SPEED_MM_S));
     _stepper.runContinous(CCW);
 }
 
