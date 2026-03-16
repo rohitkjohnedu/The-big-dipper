@@ -219,14 +219,19 @@ void Diagnostics::updateMotorTest() {
 // =============================================================================
 
 void Diagnostics::updateMoveTest() {
-    bool timedOut = (millis() - _moveTestStart) >= MOVE_TIMEOUT_MS;
+    uint32_t now     = millis();
+    uint32_t elapsed = now - _moveTestStart;
+
+    if (elapsed < SETTLE_MS) return;   // startup guard: let motion begin before polling
+
+    bool timedOut = elapsed >= MOVE_TIMEOUT_MS;
 
     if (!_mc->isMoveDone() && !timedOut) return;
 
     float actual = _mc->getPositionMm() - _moveTestStartPos;
 
     if (timedOut && !_mc->isMoveDone()) {
-        Serial.println("DIAG:MOVE:FAIL timeout — motor did not reach target");
+        Serial.println("DIAG:MOVE:FAIL timeout - motor did not reach target");
     } else {
         bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
         Serial.print("DIAG:MOVE:");

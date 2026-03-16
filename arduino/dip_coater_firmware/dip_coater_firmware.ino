@@ -59,20 +59,17 @@ static void dispatchCommand(char* line) {
     } else if (strcmp(line, "DIAG EXIT") == 0) {
         diag.exit();
     } else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
-        float spd = 5.0f;
-        sscanf(line + 13, " %f", &spd);
+        float spd = *(line + 13) ? atof(line + 13) : 5.0f;
         diag.startJog(false, spd);
     } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
-        float spd = 5.0f;
-        sscanf(line + 11, " %f", &spd);
+        float spd = *(line + 11) ? atof(line + 11) : 5.0f;
         diag.startJog(true, spd);
     } else if (strcmp(line, "DIAG JOG STOP") == 0) {
         diag.exit();
     } else if (strcmp(line, "DIAG POS") == 0) {
         diag.printPosition();
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
-        float mm = 10.0f;
-        sscanf(line + 9, " %f", &mm);
+        float mm = *(line + 9) ? atof(line + 9) : 10.0f;
         diag.startMoveTest(mm);
     } else {
         // TODO step 6: forward to CommandParser
