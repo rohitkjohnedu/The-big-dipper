@@ -1,7 +1,9 @@
 #pragma once
 
-#ifndef ARDUINO
-#include <cstdint>   // uint8_t for native/host builds
+#ifdef ARDUINO
+#  include <Arduino.h>   // uint8_t for embedded builds
+#else
+#  include <cstdint>     // uint8_t for native/host builds
 #endif
 
 // =============================================================================
