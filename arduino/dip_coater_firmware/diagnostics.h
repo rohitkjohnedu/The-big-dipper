@@ -17,13 +17,17 @@
 
 class Diagnostics {
 public:
-    enum class Mode : uint8_t { INACTIVE, MOTOR_TEST, ENDSTOP_TEST };
+    enum class Mode : uint8_t { INACTIVE, MOTOR_TEST, ENDSTOP_TEST, JOG, MOVE_TEST };
 
     Diagnostics();
     void begin(MotionController& mc, StateMachine& sm);
 
     void startMotorTest();
+    void startMotorEncoderTest();
     void startEndstopTest();
+    void startJog(bool up, float speedMms);
+    void startMoveTest(float mm);
+    void printPosition();
     void exit();
     void update();
 
@@ -32,6 +36,13 @@ public:
 
 private:
     enum class MotorPhase : uint8_t {
+        // Simple move test (current)
+        MOVE_DOWN,
+        MOVE_DOWN_WAIT,
+        MOVE_UP,
+        MOVE_UP_WAIT,
+        DONE,
+        // Extended test phases (reserved for later)
         JOG_DOWN,
         JOG_DOWN_SETTLE,
         JOG_DOWN_CHECK,
@@ -43,8 +54,7 @@ private:
         ACCURACY_DOWN_CHECK,
         ACCURACY_UP,
         ACCURACY_UP_SETTLE,
-        ACCURACY_UP_CHECK,
-        DONE
+        ACCURACY_UP_CHECK
     };
 
     MotionController* _mc;
@@ -55,23 +65,35 @@ private:
     float             _startPos;
     int               _passed;
     int               _failed;
+    bool              _checkEncoder;
 
     // Endstop debounce tracking
     bool _lastTop;
     bool _lastBot;
 
+    // Move test state
+    float _moveTestStartPos;
+    float _moveTestDeltaMm;
+    uint32_t _moveTestStart;
+
     void check(const char* name, bool ok);
     void updateMotorTest();
     void updateEndstopTest();
+    void updateMoveTest();
 
-    // Test parameters
-    static constexpr float    JOG_SPEED        =  5.0f;
+    // Test parameters — speeds kept low to limit current draw
+    static constexpr float    DIAG_SPEED_MMS   =  2.0f;
+    static constexpr float    DIAG_ACCEL_MMS2  =  5.0f;
+    static constexpr float    DIAG_DIST_MM     =  5.0f;
+    static constexpr float    TOLERANCE_MM     =  1.5f;
+    static constexpr uint32_t MOVE_TIMEOUT_MS  = 30000;
+    static constexpr uint32_t SETTLE_MS        =   500;
+    static constexpr uint32_t DEBOUNCE_MS      =    20;
+    // Reserved for extended tests
+    static constexpr float    JOG_SPEED        =  2.0f;
     static constexpr uint32_t PRESENCE_MS      =  2000;
     static constexpr float    PRESENCE_MIN_MM  =  3.0f;
     static constexpr uint32_t HOME_TIMEOUT_MS  = 30000;
     static constexpr uint32_t ACCURACY_DOWN_MS = 10000;
     static constexpr uint32_t ACCURACY_UP_MS   =  5000;
-    static constexpr float    TOLERANCE_MM     =  2.0f;
-    static constexpr uint32_t SETTLE_MS        =   500;
-    static constexpr uint32_t DEBOUNCE_MS      =    20;
 };

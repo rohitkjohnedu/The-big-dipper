@@ -11,6 +11,8 @@ Diagnostics::Diagnostics()
     , _phaseStart(0), _startPos(0.0f)
     , _passed(0), _failed(0)
     , _lastTop(false), _lastBot(false)
+    , _moveTestStartPos(0.0f), _moveTestDeltaMm(0.0f), _moveTestStart(0)
+    , _checkEncoder(false)
 {}
 
 void Diagnostics::begin(MotionController& mc, StateMachine& sm) {
@@ -23,14 +25,35 @@ void Diagnostics::begin(MotionController& mc, StateMachine& sm) {
 // =============================================================================
 
 void Diagnostics::startMotorTest() {
-    Serial.println("DIAG:MOTOR:START");
-    _mode       = Mode::MOTOR_TEST;
-    _motorPhase = MotorPhase::JOG_DOWN;
-    _passed     = 0;
-    _failed     = 0;
-    _startPos   = _mc->getPositionMm();   // capture pre-jog position
-    _phaseStart = millis();
-    _mc->jog(false, JOG_SPEED);           // false = down
+    Serial.print("DIAG:MOTOR:START down=");
+    Serial.print(DIAG_DIST_MM, 0);
+    Serial.print("mm speed=");
+    Serial.print(DIAG_SPEED_MMS, 0);
+    Serial.println("mm/s");
+    _mode          = Mode::MOTOR_TEST;
+    _motorPhase    = MotorPhase::MOVE_DOWN;
+    _passed        = 0;
+    _failed        = 0;
+    _checkEncoder  = false;
+    _startPos      = _mc->getPositionMm();
+    _phaseStart    = millis();
+    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+}
+
+void Diagnostics::startMotorEncoderTest() {
+    Serial.print("DIAG:MOTORENCODER:START down=");
+    Serial.print(DIAG_DIST_MM, 0);
+    Serial.print("mm speed=");
+    Serial.print(DIAG_SPEED_MMS, 0);
+    Serial.println("mm/s");
+    _mode          = Mode::MOTOR_TEST;
+    _motorPhase    = MotorPhase::MOVE_DOWN;
+    _passed        = 0;
+    _failed        = 0;
+    _checkEncoder  = true;
+    _startPos      = _mc->getPositionMm();
+    _phaseStart    = millis();
+    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
 }
 
 void Diagnostics::startEndstopTest() {
@@ -41,8 +64,31 @@ void Diagnostics::startEndstopTest() {
     _lastBot = digitalRead(PIN_ENDSTOP_BOTTOM) == LOW;
 }
 
+void Diagnostics::startJog(bool up, float speedMms) {
+    _mode = Mode::JOG;
+    _mc->jog(up, speedMms);
+    Serial.print("DIAG:JOG:");
+    Serial.print(up ? "UP:" : "DOWN:");
+    Serial.println(speedMms, 1);
+}
+
+void Diagnostics::printPosition() {
+    Serial.print("DIAG:POS:");
+    Serial.println(_mc->getPositionMm(), 2);
+}
+
+void Diagnostics::startMoveTest(float mm) {
+    _moveTestDeltaMm  = mm;
+    _moveTestStartPos = _mc->getPositionMm();
+    _moveTestStart    = millis();
+    _mode             = Mode::MOVE_TEST;
+    _mc->moveByMm(mm, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+    Serial.print("DIAG:MOVE:START mm=");
+    Serial.println(mm, 1);
+}
+
 void Diagnostics::exit() {
-    if (_mode == Mode::MOTOR_TEST) {
+    if (_mode == Mode::MOTOR_TEST || _mode == Mode::JOG || _mode == Mode::MOVE_TEST) {
         _mc->stop();
     }
     _mode = Mode::INACTIVE;
@@ -52,6 +98,7 @@ void Diagnostics::exit() {
 void Diagnostics::update() {
     if (_mode == Mode::MOTOR_TEST)   updateMotorTest();
     if (_mode == Mode::ENDSTOP_TEST) updateEndstopTest();
+    if (_mode == Mode::MOVE_TEST)    updateMoveTest();
 }
 
 // =============================================================================
@@ -92,121 +139,106 @@ void Diagnostics::check(const char* name, bool ok) {
 void Diagnostics::updateMotorTest() {
     uint32_t now     = millis();
     uint32_t elapsed = now - _phaseStart;
+    bool     timedOut = elapsed >= MOVE_TIMEOUT_MS;
 
     switch (_motorPhase) {
 
-        // ----------------------------------------------------------------
-        // Jog down: verify motor and encoder are present
-        // ----------------------------------------------------------------
-        case MotorPhase::JOG_DOWN:
-            if (elapsed >= PRESENCE_MS) {
-                _mc->stop();
+        case MotorPhase::MOVE_DOWN:
+            if (timedOut) {
+                Serial.println("DIAG:MOTOR:FAIL timeout waiting for move down");
+                _motorPhase = MotorPhase::DONE;
+                break;
+            }
+            if (_mc->isMoveDone()) {
                 _phaseStart = now;
-                _motorPhase = MotorPhase::JOG_DOWN_SETTLE;
+                _motorPhase = MotorPhase::MOVE_DOWN_WAIT;
             }
             break;
 
-        case MotorPhase::JOG_DOWN_SETTLE:
+        case MotorPhase::MOVE_DOWN_WAIT:
             if (elapsed >= SETTLE_MS) {
-                _motorPhase = MotorPhase::JOG_DOWN_CHECK;
+                if (_checkEncoder) {
+                    float actual = _mc->getPositionMm() - _startPos;
+                    check("Move down (encoder within tolerance)",
+                          fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
+                } else {
+                    Serial.println("DIAG:MOTOR:move down complete");
+                }
+                _startPos   = _mc->getPositionMm();
+                _phaseStart = now;
+                _motorPhase = MotorPhase::MOVE_UP;
+                _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
             }
             break;
 
-        case MotorPhase::JOG_DOWN_CHECK: {
-            float moved = _mc->getPositionMm() - _startPos;
-            check("Motor present (encoder moved >= 3mm)", moved >= PRESENCE_MIN_MM);
-            // Transition state machine to HOMING so HOME_WAIT can detect completion
-            _sm->toHoming();
-            _mc->executeHome();
-            _phaseStart = now;
-            _motorPhase = MotorPhase::HOME_WAIT;
+        case MotorPhase::MOVE_UP:
+            if (timedOut) {
+                Serial.println("DIAG:MOTOR:FAIL timeout waiting for move up");
+                _motorPhase = MotorPhase::DONE;
+                break;
+            }
+            if (_mc->isMoveDone()) {
+                _phaseStart = now;
+                _motorPhase = MotorPhase::MOVE_UP_WAIT;
+            }
             break;
-        }
 
-        // ----------------------------------------------------------------
-        // Homing: drive up until top endstop fires, then back off
-        // ----------------------------------------------------------------
-        case MotorPhase::HOME_WAIT:
-            if (_sm->getState() == SystemState::READY) {
-                _motorPhase = MotorPhase::HOME_CHECK;
-            } else if (elapsed >= HOME_TIMEOUT_MS) {
-                check("Homing completed within timeout", false);
+        case MotorPhase::MOVE_UP_WAIT:
+            if (elapsed >= SETTLE_MS) {
+                if (_checkEncoder) {
+                    float actual = _startPos - _mc->getPositionMm();
+                    check("Move up (encoder within tolerance)",
+                          fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
+                } else {
+                    Serial.println("DIAG:MOTOR:move up complete");
+                }
                 _motorPhase = MotorPhase::DONE;
             }
             break;
 
-        case MotorPhase::HOME_CHECK:
-            check("Homing completed within timeout", true);
-            _startPos   = _mc->getPositionMm();
-            _mc->jog(false, JOG_SPEED);   // down
-            _phaseStart = now;
-            _motorPhase = MotorPhase::ACCURACY_DOWN;
-            break;
-
-        // ----------------------------------------------------------------
-        // Accuracy down
-        // ----------------------------------------------------------------
-        case MotorPhase::ACCURACY_DOWN:
-            if (elapsed >= ACCURACY_DOWN_MS) {
-                _mc->stop();
-                _phaseStart = now;
-                _motorPhase = MotorPhase::ACCURACY_DOWN_SETTLE;
+        case MotorPhase::DONE: {
+            const char* tag = _checkEncoder ? "DIAG:MOTORENCODER:DONE" : "DIAG:MOTOR:DONE";
+            if (_checkEncoder) {
+                Serial.print(tag);
+                Serial.print(" passed="); Serial.print(_passed);
+                Serial.print(" failed="); Serial.println(_failed);
+            } else {
+                Serial.println(tag);
             }
-            break;
-
-        case MotorPhase::ACCURACY_DOWN_SETTLE:
-            if (elapsed >= SETTLE_MS) {
-                _motorPhase = MotorPhase::ACCURACY_DOWN_CHECK;
-            }
-            break;
-
-        case MotorPhase::ACCURACY_DOWN_CHECK: {
-            float expected = JOG_SPEED * (ACCURACY_DOWN_MS / 1000.0f);
-            float actual   = _mc->getPositionMm() - _startPos;
-            check("Accuracy down (within 2mm)", fabsf(actual - expected) <= TOLERANCE_MM);
-            _startPos   = _mc->getPositionMm();
-            _mc->jog(true, JOG_SPEED);    // up
-            _phaseStart = now;
-            _motorPhase = MotorPhase::ACCURACY_UP;
-            break;
-        }
-
-        // ----------------------------------------------------------------
-        // Accuracy up
-        // ----------------------------------------------------------------
-        case MotorPhase::ACCURACY_UP:
-            if (elapsed >= ACCURACY_UP_MS) {
-                _mc->stop();
-                _phaseStart = now;
-                _motorPhase = MotorPhase::ACCURACY_UP_SETTLE;
-            }
-            break;
-
-        case MotorPhase::ACCURACY_UP_SETTLE:
-            if (elapsed >= SETTLE_MS) {
-                _motorPhase = MotorPhase::ACCURACY_UP_CHECK;
-            }
-            break;
-
-        case MotorPhase::ACCURACY_UP_CHECK: {
-            float expected = JOG_SPEED * (ACCURACY_UP_MS / 1000.0f);
-            float actual   = _startPos - _mc->getPositionMm();   // up = decrease in mm
-            check("Accuracy up (within 2mm)", fabsf(actual - expected) <= TOLERANCE_MM);
-            _motorPhase = MotorPhase::DONE;
-            break;
-        }
-
-        // ----------------------------------------------------------------
-        // Done
-        // ----------------------------------------------------------------
-        case MotorPhase::DONE:
-            Serial.print("DIAG:MOTOR:DONE passed=");
-            Serial.print(_passed);
-            Serial.print(" failed=");
-            Serial.println(_failed);
             _mode = Mode::INACTIVE;
             break;
+        }
+
+        default:
+            break;   // extended phases not active yet
     }
+}
+
+// =============================================================================
+// Move test — command a fixed distance, wait for standstill, check encoder
+// =============================================================================
+
+void Diagnostics::updateMoveTest() {
+    bool timedOut = (millis() - _moveTestStart) >= MOVE_TIMEOUT_MS;
+
+    if (!_mc->isMoveDone() && !timedOut) return;
+
+    float actual = _mc->getPositionMm() - _moveTestStartPos;
+
+    if (timedOut && !_mc->isMoveDone()) {
+        Serial.println("DIAG:MOVE:FAIL timeout — motor did not reach target");
+    } else {
+        bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
+        Serial.print("DIAG:MOVE:");
+        Serial.print(ok ? "PASS" : "FAIL");
+        Serial.print(" commanded=");
+        Serial.print(_moveTestDeltaMm, 1);
+        Serial.print("mm actual=");
+        Serial.print(actual, 1);
+        Serial.println("mm");
+    }
+
+    _mode = Mode::INACTIVE;
 }
 
 // =============================================================================

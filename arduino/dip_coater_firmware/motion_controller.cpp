@@ -165,6 +165,18 @@ void MotionController::resume() {
     }
 }
 
+void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) {
+    float saved = _accelMms2;
+    _accelMms2 = accelMms2;
+    _mode = ProfileMode::NONE;   // library handles the move; update() stays idle
+    startMoveToMm(positionMm() + deltaMm, speedMms);
+    _accelMms2 = saved;          // restore for normal profile moves
+}
+
+bool MotionController::isMoveDone() {
+    return isMoveComplete();
+}
+
 void MotionController::jog(bool up, float speedMms) {
     _mode = ProfileMode::JOG;
     _commandedVelocityMms = speedMms;

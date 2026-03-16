@@ -40,6 +40,10 @@ public:
     bool addSegment(float distMm, float speedMms);   // false if buffer full
     void runLoadedMove();
 
+    // Single relative move — used by Diagnostics
+    void moveByMm(float deltaMm, float speedMms, float accelMms2);
+    bool isMoveDone();
+
     // ISR callback — wire to endstop interrupt handlers in .ino
     void onEndstopTriggered(bool isTop);
 

@@ -52,10 +52,28 @@ static void dispatchCommand(char* line) {
 
     if (strcmp(line, "DIAG MOTOR") == 0) {
         diag.startMotorTest();
+    } else if (strcmp(line, "DIAG MOTORENCODER") == 0) {
+        diag.startMotorEncoderTest();
     } else if (strcmp(line, "DIAG ENDSTOP") == 0) {
         diag.startEndstopTest();
     } else if (strcmp(line, "DIAG EXIT") == 0) {
         diag.exit();
+    } else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
+        float spd = 5.0f;
+        sscanf(line + 13, " %f", &spd);
+        diag.startJog(false, spd);
+    } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
+        float spd = 5.0f;
+        sscanf(line + 11, " %f", &spd);
+        diag.startJog(true, spd);
+    } else if (strcmp(line, "DIAG JOG STOP") == 0) {
+        diag.exit();
+    } else if (strcmp(line, "DIAG POS") == 0) {
+        diag.printPosition();
+    } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
+        float mm = 10.0f;
+        sscanf(line + 9, " %f", &mm);
+        diag.startMoveTest(mm);
     } else {
         // TODO step 6: forward to CommandParser
         Serial.print("ERR:unknown command: ");
@@ -77,7 +95,7 @@ void setup() {
     diag.begin(mc, sm);
 
     Serial.println("Dip coater ready. State: IDLE");
-    Serial.println("Commands: DIAG MOTOR | DIAG ENDSTOP | DIAG EXIT");
+    Serial.println("Commands: DIAG MOVE [mm] | DIAG MOTOR | DIAG ENDSTOP | DIAG JOG DOWN [spd] | DIAG JOG UP [spd] | DIAG JOG STOP | DIAG POS | DIAG EXIT");
 }
 
 void loop() {
