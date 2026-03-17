@@ -89,7 +89,7 @@ void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
     _moveTestStart     = millis();
     _moveStarted       = false;
     _mode              = Mode::MOVE_TEST;
-    _mc->moveByMm(mm, speedMms, accelMms2);
+    _mc->moveByMm(-mm, speedMms, accelMms2);  // negate: positive mm = up (toward home)
     Serial.print("DIAG:MOVE:START mm=");
     Serial.print(mm, 1);
     Serial.print(" speed=");
@@ -272,9 +272,8 @@ void Diagnostics::updateMoveTest() {
     bool settled = (now - _stableSince) >= SETTLE_MS;
     if (!settled && !timedOut) return;
 
-    // Encoder convention: negative = down. Negate for display (positive = down).
     float actual        = currentPos - _moveTestStartPos;
-    float displayActual = -actual;
+    float displayActual = actual;   // positive = up, matches user-facing convention
 
     bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
     Serial.print("DIAG:MOVE:");
