@@ -54,7 +54,7 @@ public:
     float getActualAccelMms2()      const;
 
 private:
-    enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG, LIMIT_BACKOFF };
+    enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG, LIMIT_BACKOFF, MOVING };
 
     struct Segment {
         float distMm;    // signed: +ve = down
@@ -103,6 +103,9 @@ private:
     uint32_t _dwellStartMs;
     uint32_t _dwellDurationMs;
     bool     _inDwell;
+
+    // Single move (moveByMm)
+    uint32_t _movingStartMs;
 
     // Homing
     bool _homingBackoffActive;

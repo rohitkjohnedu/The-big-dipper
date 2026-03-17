@@ -233,6 +233,7 @@ void Diagnostics::updateMotorTest() {
             } else {
                 Serial.println(tag);
             }
+            _mc->stop();
             _mode = Mode::INACTIVE;
             break;
         }
@@ -284,6 +285,7 @@ void Diagnostics::updateMoveTest() {
     Serial.print(displayActual, 1);
     Serial.println("mm");
 
+    _mc->stop();
     _mode = Mode::INACTIVE;
 }
 
@@ -338,6 +340,7 @@ void Diagnostics::updateCalMove() {
     Serial.println("DIAG:CAL:Measure the actual displacement with calipers.");
     Serial.println("DIAG:CAL:Then type: DIAG CAL RESULT <actual_mm>");
 
+    _mc->stop();
     _mode = Mode::INACTIVE;
 }
 

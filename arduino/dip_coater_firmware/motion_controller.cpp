@@ -52,6 +52,7 @@ MotionController::MotionController(StateMachine& sm)
     , _dwellStartMs(0)
     , _dwellDurationMs(0)
     , _inDwell(false)
+    , _movingStartMs(0)
     , _homingBackoffActive(false)
     , _limitTriggered(false)
     , _limitIsTop(false)
@@ -82,9 +83,10 @@ void MotionController::update() {
         case ProfileMode::HOMING:      updateHoming();      break;
         case ProfileMode::TRAPEZOIDAL: updateTrapezoidal(); break;
         case ProfileMode::SEGMENTED:   updateSegmented();   break;
-        case ProfileMode::JOG:          break;   // library handles continuous motion
+        case ProfileMode::JOG:           break;   // library handles continuous motion
+        case ProfileMode::MOVING:        break;   // caller resets via stop()
         case ProfileMode::LIMIT_BACKOFF: updateLimitBackoff(); break;
-        case ProfileMode::NONE:         break;
+        case ProfileMode::NONE:          break;
     }
 }
 
@@ -172,7 +174,8 @@ void MotionController::resume() {
 void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) {
     float saved = _accelMms2;
     _accelMms2 = accelMms2;
-    _mode = ProfileMode::NONE;   // library handles the move; update() stays idle
+    _mode = ProfileMode::MOVING;
+    _movingStartMs = millis();
     startMoveToMm(positionMm() + deltaMm, speedMms);
     _accelMms2 = saved;          // restore for normal profile moves
 }
