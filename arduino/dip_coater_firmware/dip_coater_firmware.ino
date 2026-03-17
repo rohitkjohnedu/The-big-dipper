@@ -55,7 +55,7 @@ static void dispatchCommand(char* line) {
         Serial.println("  DIAG MOTOR              move down 5mm then up 5mm");
         Serial.println("  DIAG MOTORENCODER       same + encoder pass/fail check");
         Serial.println("  DIAG ENDSTOP            live endstop monitor (trigger manually)");
-        Serial.println("  DIAG MOVE <mm>          move by <mm>, check encoder");
+        Serial.println("  DIAG MOVE <mm> [spd] [acc]  move by mm, optional speed mm/s (def 2) and accel mm/s2 (def 5)");
         Serial.println("  DIAG JOG DOWN [spd]     continuous jog down at [spd] mm/s (default 5)");
         Serial.println("  DIAG JOG UP   [spd]     continuous jog up   at [spd] mm/s (default 5)");
         Serial.println("  DIAG JOG STOP           stop continuous jog");
@@ -83,8 +83,17 @@ static void dispatchCommand(char* line) {
     } else if (strcmp(line, "DIAG POS") == 0) {
         diag.printPosition();
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
-        float mm = *(line + 9) ? atof(line + 9) : 10.0f;
-        diag.startMoveTest(mm);
+        const char* p = line + 9;
+        float mm = *p ? atof(p) : 10.0f;
+        while (*p == ' ') p++;             // skip leading space before mm
+        while (*p && *p != ' ') p++;       // skip mm digits
+        float speed = *p ? atof(p) : 0.0f;
+        while (*p == ' ') p++;             // skip space before speed
+        while (*p && *p != ' ') p++;       // skip speed digits
+        float accel = *p ? atof(p) : 0.0f;
+        diag.startMoveTest(mm,
+                           speed > 0.0f ? speed : Diagnostics::DIAG_SPEED_MMS,
+                           accel > 0.0f ? accel : Diagnostics::DIAG_ACCEL_MMS2);
     } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
         float mm = *(line + 15) ? atof(line + 15) : 0.0f;
         diag.computeCalResult(mm);

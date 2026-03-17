@@ -26,7 +26,7 @@ public:
     void startMotorEncoderTest();
     void startEndstopTest();
     void startJog(bool up, float speedMms);
-    void startMoveTest(float mm);
+    void startMoveTest(float mm, float speedMms = DIAG_SPEED_MMS, float accelMms2 = DIAG_ACCEL_MMS2);
     void startCalMove(float mm);
     void computeCalResult(float actualMm);
     void printPosition();
@@ -35,6 +35,10 @@ public:
 
     Mode mode() const { return _mode; }
     bool active() const { return _mode != Mode::INACTIVE; }
+
+    static constexpr float DIAG_SPEED_MMS  =  2.0f;
+    static constexpr float DIAG_ACCEL_MMS2 =  5.0f;
+    static constexpr float CAL_SPEED_MMS   = 10.0f;
 
 private:
     enum class MotorPhase : uint8_t {
@@ -74,9 +78,16 @@ private:
     bool _lastBot;
 
     // Move test state
-    float _moveTestStartPos;
-    float _moveTestDeltaMm;
+    float    _moveTestStartPos;
+    float    _moveTestDeltaMm;
+    float    _moveTestSpeedMms;
+    float    _moveTestAccelMms2;
     uint32_t _moveTestStart;
+
+    // Position-stability tracker (shared by updateMoveTest and updateCalMove)
+    bool     _moveStarted;    // true once position has left start by > MOVE_START_MM
+    float    _trackedPos;     // last position at which significant movement was seen
+    uint32_t _stableSince;    // millis when position was last updated significantly
 
     void check(const char* name, bool ok);
     void updateMotorTest();
@@ -90,14 +101,12 @@ private:
     float    _calEncoderMm;    // encoder displacement, positive = down (for display)
     uint32_t _calStart;
 
-    // Test parameters — speeds kept low to limit current draw
-    static constexpr float    DIAG_SPEED_MMS   =  2.0f;
-    static constexpr float    CAL_SPEED_MMS    = 10.0f;   // faster for calibration moves
-    static constexpr float    DIAG_ACCEL_MMS2  =  5.0f;
     static constexpr float    DIAG_DIST_MM     =  5.0f;
     static constexpr float    TOLERANCE_MM     =  1.5f;
-    static constexpr uint32_t MOVE_TIMEOUT_MS  = 30000;
-    static constexpr uint32_t SETTLE_MS        =   500;
+    static constexpr uint32_t MOVE_TIMEOUT_MS  = 60000;   // 60s — no speed assumption needed
+    static constexpr uint32_t SETTLE_MS        =   300;   // ms of position stability = done
+    static constexpr float    MOVE_START_MM    =   0.2f;  // movement detection threshold
+    static constexpr float    STABLE_MM        =   0.05f; // max drift to count as settled
     static constexpr uint32_t DEBOUNCE_MS      =    20;
     // Reserved for extended tests
     static constexpr float    JOG_SPEED        =  2.0f;

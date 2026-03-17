@@ -11,7 +11,8 @@ Diagnostics::Diagnostics()
     , _phaseStart(0), _startPos(0.0f)
     , _passed(0), _failed(0)
     , _lastTop(false), _lastBot(false)
-    , _moveTestStartPos(0.0f), _moveTestDeltaMm(0.0f), _moveTestStart(0)
+    , _moveTestStartPos(0.0f), _moveTestDeltaMm(0.0f), _moveTestSpeedMms(DIAG_SPEED_MMS), _moveTestAccelMms2(DIAG_ACCEL_MMS2), _moveTestStart(0)
+    , _moveStarted(false), _trackedPos(0.0f), _stableSince(0)
     , _checkEncoder(false)
     , _calStartPos(0.0f), _calCommandedMm(0.0f), _calEncoderMm(0.0f), _calStart(0)
 {}
@@ -38,7 +39,8 @@ void Diagnostics::startMotorTest() {
     _checkEncoder  = false;
     _startPos      = _mc->getPositionMm();
     _phaseStart    = millis();
-    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+    _moveStarted = false;
+    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // negative = down
 }
 
 void Diagnostics::startMotorEncoderTest() {
@@ -54,7 +56,8 @@ void Diagnostics::startMotorEncoderTest() {
     _checkEncoder  = true;
     _startPos      = _mc->getPositionMm();
     _phaseStart    = millis();
-    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+    _moveStarted   = false;
+    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // negative = down
 }
 
 void Diagnostics::startEndstopTest() {
@@ -78,14 +81,22 @@ void Diagnostics::printPosition() {
     Serial.println(_mc->getPositionMm(), 2);
 }
 
-void Diagnostics::startMoveTest(float mm) {
-    _moveTestDeltaMm  = mm;
-    _moveTestStartPos = _mc->getPositionMm();
-    _moveTestStart    = millis();
-    _mode             = Mode::MOVE_TEST;
-    _mc->moveByMm(mm, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
+    _moveTestDeltaMm   = mm;
+    _moveTestSpeedMms  = speedMms;
+    _moveTestAccelMms2 = accelMms2;
+    _moveTestStartPos  = _mc->getPositionMm();
+    _moveTestStart     = millis();
+    _moveStarted       = false;
+    _mode              = Mode::MOVE_TEST;
+    _mc->moveByMm(mm, speedMms, accelMms2);
     Serial.print("DIAG:MOVE:START mm=");
-    Serial.println(mm, 1);
+    Serial.print(mm, 1);
+    Serial.print(" speed=");
+    Serial.print(speedMms, 1);
+    Serial.print("mm/s accel=");
+    Serial.print(accelMms2, 1);
+    Serial.println("mm/s2");
 }
 
 void Diagnostics::exit() {
@@ -139,64 +150,79 @@ void Diagnostics::check(const char* name, bool ok) {
 // =============================================================================
 
 void Diagnostics::updateMotorTest() {
-    uint32_t now     = millis();
-    uint32_t elapsed = now - _phaseStart;
+    uint32_t now      = millis();
+    uint32_t elapsed  = now - _phaseStart;
     bool     timedOut = elapsed >= MOVE_TIMEOUT_MS;
 
     switch (_motorPhase) {
 
-        case MotorPhase::MOVE_DOWN:
+        case MotorPhase::MOVE_DOWN: {
             if (timedOut) {
                 Serial.println("DIAG:MOTOR:FAIL timeout waiting for move down");
                 _motorPhase = MotorPhase::DONE;
                 break;
             }
-            if (_mc->isMoveDone()) {
-                _phaseStart = now;
-                _motorPhase = MotorPhase::MOVE_DOWN_WAIT;
-            }
-            break;
-
-        case MotorPhase::MOVE_DOWN_WAIT:
-            if (elapsed >= SETTLE_MS) {
-                if (_checkEncoder) {
-                    float actual = _mc->getPositionMm() - _startPos;
-                    check("Move down (encoder within tolerance)",
-                          fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
-                } else {
-                    Serial.println("DIAG:MOTOR:move down complete");
+            float pos = _mc->getPositionMm();
+            if (!_moveStarted) {
+                if (fabsf(pos - _startPos) >= MOVE_START_MM) {
+                    _moveStarted = true;
+                    _trackedPos  = pos;
+                    _stableSince = now;
                 }
-                _startPos   = _mc->getPositionMm();
-                _phaseStart = now;
-                _motorPhase = MotorPhase::MOVE_UP;
-                _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
+                break;
             }
-            break;
+            if (fabsf(pos - _trackedPos) > STABLE_MM) {
+                _trackedPos  = pos;
+                _stableSince = now;
+            }
+            if ((now - _stableSince) < SETTLE_MS) break;
 
-        case MotorPhase::MOVE_UP:
+            // Motor has settled — check encoder and start return move
+            if (_checkEncoder) {
+                float actual = pos - _startPos;
+                check("Move down", fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
+            } else {
+                Serial.println("DIAG:MOTOR:move down complete");
+            }
+            _startPos    = pos;
+            _moveStarted = false;
+            _phaseStart  = now;
+            _motorPhase  = MotorPhase::MOVE_UP;
+            _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // positive = up
+            break;
+        }
+
+        case MotorPhase::MOVE_UP: {
             if (timedOut) {
                 Serial.println("DIAG:MOTOR:FAIL timeout waiting for move up");
                 _motorPhase = MotorPhase::DONE;
                 break;
             }
-            if (_mc->isMoveDone()) {
-                _phaseStart = now;
-                _motorPhase = MotorPhase::MOVE_UP_WAIT;
-            }
-            break;
-
-        case MotorPhase::MOVE_UP_WAIT:
-            if (elapsed >= SETTLE_MS) {
-                if (_checkEncoder) {
-                    float actual = _startPos - _mc->getPositionMm();
-                    check("Move up (encoder within tolerance)",
-                          fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
-                } else {
-                    Serial.println("DIAG:MOTOR:move up complete");
+            float pos = _mc->getPositionMm();
+            if (!_moveStarted) {
+                if (fabsf(pos - _startPos) >= MOVE_START_MM) {
+                    _moveStarted = true;
+                    _trackedPos  = pos;
+                    _stableSince = now;
                 }
-                _motorPhase = MotorPhase::DONE;
+                break;
             }
+            if (fabsf(pos - _trackedPos) > STABLE_MM) {
+                _trackedPos  = pos;
+                _stableSince = now;
+            }
+            if ((now - _stableSince) < SETTLE_MS) break;
+
+            // Motor has settled — check encoder
+            if (_checkEncoder) {
+                float actual = pos - _startPos;
+                check("Move up", fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
+            } else {
+                Serial.println("DIAG:MOTOR:move up complete");
+            }
+            _motorPhase = MotorPhase::DONE;
             break;
+        }
 
         case MotorPhase::DONE: {
             const char* tag = _checkEncoder ? "DIAG:MOTORENCODER:DONE" : "DIAG:MOTOR:DONE";
@@ -217,21 +243,37 @@ void Diagnostics::updateMotorTest() {
 }
 
 // =============================================================================
-// Move test — command a fixed distance, wait for standstill, check encoder
+// Move test — command a fixed distance, detect stop via position stability
 // =============================================================================
 
 void Diagnostics::updateMoveTest() {
-    uint32_t now     = millis();
-    uint32_t elapsed = now - _moveTestStart;
+    uint32_t now        = millis();
+    float    currentPos = _mc->getPositionMm();
+    bool     timedOut   = (now - _moveTestStart) >= MOVE_TIMEOUT_MS;
 
-    // getMotorState(STANDSTILL) is only briefly true after the motor stops and
-    // is unreliable for detecting move completion. Instead, wait the expected
-    // move duration then sample the encoder directly.
-    uint32_t expectedMs = (uint32_t)(fabsf(_moveTestDeltaMm) / DIAG_SPEED_MMS * 1000.0f) + 500UL;
-    if (elapsed < expectedMs) return;
+    if (!_moveStarted) {
+        // Wait until the motor has actually left the start position before
+        // checking for stability — avoids a false "done" at t=0.
+        if (fabsf(currentPos - _moveTestStartPos) >= MOVE_START_MM) {
+            _moveStarted = true;
+            _trackedPos  = currentPos;
+            _stableSince = now;
+        } else if (!timedOut) {
+            return;
+        }
+    }
+
+    // If position moved significantly, reset the stability timer.
+    if (fabsf(currentPos - _trackedPos) > STABLE_MM) {
+        _trackedPos  = currentPos;
+        _stableSince = now;
+    }
+
+    bool settled = (now - _stableSince) >= SETTLE_MS;
+    if (!settled && !timedOut) return;
 
     // Encoder convention: negative = down. Negate for display (positive = down).
-    float actual        = _mc->getPositionMm() - _moveTestStartPos;
+    float actual        = currentPos - _moveTestStartPos;
     float displayActual = -actual;
 
     bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
@@ -255,6 +297,7 @@ void Diagnostics::startCalMove(float mm) {
     _calStartPos    = _mc->getPositionMm();
     _calStart       = millis();
     _calEncoderMm   = 0.0f;
+    _moveStarted    = false;
     _mode           = Mode::CAL_MOVE;
     _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);
     Serial.print("DIAG:CAL:START commanded=");
@@ -265,13 +308,29 @@ void Diagnostics::startCalMove(float mm) {
 }
 
 void Diagnostics::updateCalMove() {
-    uint32_t now     = millis();
-    uint32_t elapsed = now - _calStart;
+    uint32_t now        = millis();
+    float    currentPos = _mc->getPositionMm();
+    bool     timedOut   = (now - _calStart) >= MOVE_TIMEOUT_MS;
 
-    uint32_t expectedMs = (uint32_t)(fabsf(_calCommandedMm) / CAL_SPEED_MMS * 1000.0f) + 1000UL;
-    if (elapsed < expectedMs) return;
+    if (!_moveStarted) {
+        if (fabsf(currentPos - _calStartPos) >= MOVE_START_MM) {
+            _moveStarted = true;
+            _trackedPos  = currentPos;
+            _stableSince = now;
+        } else if (!timedOut) {
+            return;
+        }
+    }
 
-    float actual  = _mc->getPositionMm() - _calStartPos;
+    if (fabsf(currentPos - _trackedPos) > STABLE_MM) {
+        _trackedPos  = currentPos;
+        _stableSince = now;
+    }
+
+    bool settled = (now - _stableSince) >= SETTLE_MS;
+    if (!settled && !timedOut) return;
+
+    float actual  = currentPos - _calStartPos;
     _calEncoderMm = -actual;   // positive = down (matches physical measurement direction)
 
     Serial.print("DIAG:CAL:DONE encoder=");
