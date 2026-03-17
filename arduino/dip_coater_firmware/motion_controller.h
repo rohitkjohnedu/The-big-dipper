@@ -54,7 +54,7 @@ public:
     float getActualAccelMms2()      const;
 
 private:
-    enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG };
+    enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG, LIMIT_BACKOFF };
 
     struct Segment {
         float distMm;    // signed: +ve = down
@@ -107,6 +107,12 @@ private:
     // Homing
     bool _homingBackoffActive;
 
+    // Limit switch backoff — set from ISR, cleared in update()
+    volatile bool _limitTriggered;   // new limit event pending
+    volatile bool _limitIsTop;       // which endstop fired
+    bool          _limitBackoffActive;
+    uint32_t      _limitBackoffStart;
+
     // Pause
     PauseSnapshot _pauseSnapshot;
     bool          _paused;
@@ -125,4 +131,5 @@ private:
     void updateHoming();
     void updateTrapezoidal();
     void updateSegmented();
+    void updateLimitBackoff();
 };

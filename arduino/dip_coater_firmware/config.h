@@ -15,6 +15,10 @@
 #define HOMING_SPEED_MM_S         20.0f
 #define HOMING_BACKOFF_MM         5.0f
 
+// Limit switch backoff — how far to move away after an endstop is hit
+#define LIMIT_BACKOFF_MM          5.0f
+#define LIMIT_BACKOFF_SPEED_MM_S  10.0f
+
 // Pins
 #define PIN_ENDSTOP_BOTTOM        2
 #define PIN_ENDSTOP_TOP           3

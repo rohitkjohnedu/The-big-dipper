@@ -53,6 +53,10 @@ MotionController::MotionController(StateMachine& sm)
     , _dwellDurationMs(0)
     , _inDwell(false)
     , _homingBackoffActive(false)
+    , _limitTriggered(false)
+    , _limitIsTop(false)
+    , _limitBackoffActive(false)
+    , _limitBackoffStart(0)
     , _paused(false)
 {}
 
@@ -78,8 +82,9 @@ void MotionController::update() {
         case ProfileMode::HOMING:      updateHoming();      break;
         case ProfileMode::TRAPEZOIDAL: updateTrapezoidal(); break;
         case ProfileMode::SEGMENTED:   updateSegmented();   break;
-        case ProfileMode::JOG:         break;   // library handles continuous motion
-        case ProfileMode::NONE:        break;
+        case ProfileMode::JOG:          break;   // library handles continuous motion
+        case ProfileMode::LIMIT_BACKOFF: updateLimitBackoff(); break;
+        case ProfileMode::NONE:         break;
     }
 }
 
@@ -243,9 +248,16 @@ void MotionController::onEndstopTriggered(bool isTop) {
         startMoveToMm(HOMING_BACKOFF_MM, HOMING_SPEED_MM_S);
         return;
     }
-    // Unexpected endstop — emergency stop
-    estop();
-    _sm.toError(ErrorCode::ENDSTOP_TRIGGERED_UNEXPECTEDLY);
+    // Only respond if motor is actually moving; ignore when idle or already backing off
+    if (_mode == ProfileMode::NONE || _mode == ProfileMode::LIMIT_BACKOFF) return;
+    // Limit switch hit during motion — hard stop, back off in update()
+    _stepper.stop(HARD);
+    _commandedVelocityMms = 0.0f;
+    _inDwell  = false;
+    _paused   = false;
+    _limitTriggered = true;
+    _limitIsTop     = isTop;
+    _mode = ProfileMode::LIMIT_BACKOFF;
 }
 
 // =============================================================================
@@ -393,6 +405,42 @@ void MotionController::updateSegmented() {
             _mode = ProfileMode::NONE;
             _commandedVelocityMms = 0.0f;
             _sm.setPhase(RunPhase::NONE);
+            _sm.toReady();
+        }
+    }
+}
+
+// =============================================================================
+// updateLimitBackoff — called from update() while in LIMIT_BACKOFF mode
+// =============================================================================
+
+void MotionController::updateLimitBackoff() {
+    uint32_t now = millis();
+
+    if (_limitTriggered) {
+        _limitTriggered = false;
+        Serial.print(_limitIsTop ? "TOP" : "BOTTOM");
+        Serial.println(" LIMIT switch triggered");
+        // Back off away from the triggered endstop.
+        // positionMm() = 0 at home (top), positive going down.
+        // Top triggered: move down  → add backoff
+        // Bottom triggered: move up → subtract backoff
+        float target = _limitIsTop
+            ? positionMm() + LIMIT_BACKOFF_MM
+            : positionMm() - LIMIT_BACKOFF_MM;
+        _limitBackoffActive = true;
+        _limitBackoffStart  = now;
+        startMoveToMm(target, LIMIT_BACKOFF_SPEED_MM_S);
+        return;
+    }
+
+    if (_limitBackoffActive) {
+        uint32_t elapsed = now - _limitBackoffStart;
+        if (elapsed < 200) return;   // give motor time to start moving before polling
+        if (isMoveComplete() || elapsed >= 5000) {
+            _limitBackoffActive   = false;
+            _mode                 = ProfileMode::NONE;
+            _commandedVelocityMms = 0.0f;
             _sm.toReady();
         }
     }
