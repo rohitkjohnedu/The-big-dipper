@@ -98,6 +98,7 @@ private:
     int      _segCurrentDip;
 
     float    _targetMm;
+    float    _moveStartMm;   // position recorded at the start of each move
 
     // Dwell
     uint32_t _dwellStartMs;

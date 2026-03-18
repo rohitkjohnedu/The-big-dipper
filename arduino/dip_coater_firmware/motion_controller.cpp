@@ -1,26 +1,5 @@
 #include "motion_controller.h"
-
-// =============================================================================
-// Trace macros — enable with #define TRACE in config.h
-// Output format: "TR <millis> <message>"
-// =============================================================================
-
-#ifdef TRACE
-  #define TR(msg) do { \
-      Serial.print(F("TR ")); Serial.print(millis()); \
-      Serial.print(' '); Serial.println(F(msg)); } while(0)
-  #define TRF(msg, val) do { \
-      Serial.print(F("TRF ")); Serial.print(millis()); \
-      Serial.print(' '); Serial.print(F(msg)); Serial.println(val, 2); } while(0)
-  #define TR2F(msg, v1, sep, v2) do { \
-      Serial.print(F("TR2F ")); Serial.print(millis()); \
-      Serial.print(' '); Serial.print(F(msg)); Serial.print(v1, 2); \
-      Serial.print(F(sep)); Serial.println(v2, 2); } while(0)
-#else
-  #define TR(msg)
-  #define TRF(msg, val)
-  #define TR2F(msg, v1, sep, v2)
-#endif
+#include "trace.h"
 
 // =============================================================================
 // Unit conversion helpers
@@ -71,6 +50,7 @@ MotionController::MotionController(StateMachine& sm)
     , _segDwellTopMs(0)
     , _segCurrentDip(1)
     , _targetMm(0.0f)
+    , _moveStartMm(0.0f)
     , _dwellStartMs(0)
     , _dwellDurationMs(0)
     , _inDwell(false)
@@ -300,7 +280,8 @@ float MotionController::getActualAccelMms2()      const { return 0.0f; }
 // =============================================================================
 
 void MotionController::startMoveToMm(float targetMm, float speedMms) {
-    TR2F("startMoveToMm pos=", positionMm(), " target=", targetMm);
+    _moveStartMm          = positionMm();
+    TR2F("startMoveToMm pos=", _moveStartMm, " target=", targetMm);
     _targetMm             = targetMm;
     _commandedVelocityMms = speedMms;
     setSpeed(speedMms);
@@ -322,9 +303,15 @@ bool MotionController::isDwellComplete() const {
 
 bool MotionController::isMoveComplete() {
     if (_inDwell) return false;
-    bool done = _stepper.getMotorState(STANDSTILL);
-    if (done) { TR2F("isMoveComplete pos=", positionMm(), " target=", _targetMm); }
-    return done;
+    if (!_stepper.getMotorState(STANDSTILL)) return false;
+    // Guard against false STANDSTILL in the first few loop() iterations after a move
+    // is commanded: don't accept completion until the motor has actually left its start
+    // position, unless the commanded distance was trivially small.
+    float travelMm = fabsf(_targetMm - _moveStartMm);
+    float movedMm  = fabsf(positionMm() - _moveStartMm);
+    if (travelMm > 0.5f && movedMm < 1.0f) return false;
+    TR2F("isMoveComplete pos=", positionMm(), " target=", _targetMm);
+    return true;
 }
 
 bool MotionController::checkSoftLimit(float targetMm) {

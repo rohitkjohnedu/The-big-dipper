@@ -1,4 +1,5 @@
 #include "diagnostics.h"
+#include "trace.h"
 
 // =============================================================================
 // Constructor / begin
