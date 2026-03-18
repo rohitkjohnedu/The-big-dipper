@@ -13,7 +13,7 @@
 //
 // Coordinate system:
 //   Home (top endstop) = 0 mm.  Positive mm = Upward.
-//   CCW = up,  CW = down.  Swap if wiring is reversed.
+//   CW = up,  CCW = down.  Swap if wiring is reversed.
 // =============================================================================
 
 class MotionController {

@@ -17,3 +17,5 @@ python/profiles/*.json
 # OS
 .DS_Store
 Thumbs.db
+
+uStepperS32-master/*

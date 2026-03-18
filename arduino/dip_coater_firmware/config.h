@@ -7,9 +7,10 @@
 #define STEPS_PER_MM              800.0f   // (200 * 32) / 8.0
 
 // Travel limits
+// Coordinate system: home (top endstop) = 0 mm, positive = up, negative = down (into solution)
 #define TRAVEL_MAX_MM             900.0f
-#define SOFT_LIMIT_MIN_MM         10.0f
-#define SOFT_LIMIT_MAX_MM         890.0f
+#define SOFT_LIMIT_MIN_MM        -890.0f   // max downward travel (negative = down)
+#define SOFT_LIMIT_MAX_MM          10.0f   // small positive margin above home
 
 // Homing
 #define HOMING_SPEED_MM_S         20.0f

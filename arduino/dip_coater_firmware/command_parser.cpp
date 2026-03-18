@@ -268,7 +268,7 @@ void CommandParser::cmdMoveSeg(char* p) {
         _collectingSegs = false;
         return;
     }
-    if (!_mc.addSegment(-dist, speed)) {  // negate: positive mm = up (user convention)
+    if (!_mc.addSegment(dist, speed)) {   // positive mm = up, matches firmware convention
         err("MOVE_SEG", "seg_buffer_overflow");
         _collectingSegs = false;
         _sm.toError(ErrorCode::SEG_BUFFER_OVERFLOW);

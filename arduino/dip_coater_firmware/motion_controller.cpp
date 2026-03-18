@@ -100,11 +100,11 @@ void MotionController::executeHome() {
     _mode = ProfileMode::HOMING;
     _homingBackoffActive = false;
     _commandedVelocityMms = HOMING_SPEED_MM_S;
-    // CCW = UP toward top endstop. Swap to CW if direction is inverted.
+    // CW = UP toward top endstop.
     _stepper.setMaxVelocity(mmToDeg(HOMING_SPEED_MM_S));
     _stepper.setMaxAcceleration(mmToDeg(HOMING_ACC_MM_S2));
     _stepper.setMaxDeceleration(mmToDeg(HOMING_ACC_MM_S2));
-    _stepper.runContinous(CCW);
+    _stepper.runContinous(CW);
 }
 
 void MotionController::setSoftLimits(float minMm, float maxMm) {
@@ -154,7 +154,7 @@ void MotionController::resume() {
     if (_mode == ProfileMode::TRAPEZOIDAL) {
         _currentDip = _pauseSnapshot.currentDip;
         RunPhase ph = _pauseSnapshot.phase;
-        if      (ph == RunPhase::DESCENDING)   startMoveToMm(_depthMm, _dipSpeedMms);
+        if      (ph == RunPhase::DESCENDING)   startMoveToMm(-_depthMm, _dipSpeedMms);
         else if (ph == RunPhase::ASCENDING)    startMoveToMm(0.0f, _withdrawSpeedMms);
         else if (ph == RunPhase::DWELL_BOTTOM) startDwell(_dwellBottomMs);
         else if (ph == RunPhase::DWELL_TOP)    startDwell(_dwellTopMs);
@@ -191,7 +191,7 @@ void MotionController::jog(bool up, float speedMms) {
     _commandedVelocityMms = speedMms;
     _accelMms2 = DEFAULT_ACCEL_MM_S2;
     setSpeed(speedMms);
-    _stepper.runContinous(up ? CCW : CW);   // CCW=up, CW=down
+    _stepper.runContinous(up ? CW : CCW);   // CW=up, CCW=down
 }
 
 void MotionController::runProfile(float dipSpeedMms, float withdrawSpeedMms,
@@ -209,7 +209,7 @@ void MotionController::runProfile(float dipSpeedMms, float withdrawSpeedMms,
     _sm.toRunning();
     _sm.setPhase(RunPhase::DESCENDING);
     TR2F("runProfile depth=", _depthMm, " dipSpd=", _dipSpeedMms);
-    startMoveToMm(_depthMm, _dipSpeedMms);
+    startMoveToMm(-_depthMm, _dipSpeedMms);   // depth is positive magnitude; negate for downward position
 }
 
 void MotionController::beginSegmentedMove(uint8_t nDips, uint16_t dwellBottomMs,
@@ -251,7 +251,7 @@ void MotionController::onEndstopTriggered(bool isTop) {
         _stepper.stop(HARD);
         _stepper.encoder.setHome();   // zero encoder at top endstop
         _homingBackoffActive = true;
-        startMoveToMm(HOMING_BACKOFF_MM, HOMING_SPEED_MM_S);
+        startMoveToMm(-HOMING_BACKOFF_MM, HOMING_SPEED_MM_S);
         return;
     }
     // Only respond if motor is actually moving; ignore when idle or already backing off
@@ -353,7 +353,7 @@ void MotionController::updateTrapezoidal() {
         } else if (phase == RunPhase::DWELL_TOP) {
             TR("dwell_top done -> DESCENDING");
             _sm.setPhase(RunPhase::DESCENDING);
-            startMoveToMm(_depthMm, _dipSpeedMms);
+            startMoveToMm(-_depthMm, _dipSpeedMms);
         }
         return;
     }
@@ -444,12 +444,12 @@ void MotionController::updateLimitBackoff() {
         Serial.print(_limitIsTop ? "TOP" : "BOTTOM");
         Serial.println(" LIMIT switch triggered");
         // Back off away from the triggered endstop.
-        // positionMm() = 0 at home (top), positive going down.
-        // Top triggered: move down  → add backoff
-        // Bottom triggered: move up → subtract backoff
+        // positionMm() = 0 at home (top), positive = up, negative = down (into solution).
+        // Top triggered: move down (negative)  → subtract backoff
+        // Bottom triggered: move up (positive) → add backoff
         float target = _limitIsTop
-            ? positionMm() + LIMIT_BACKOFF_MM
-            : positionMm() - LIMIT_BACKOFF_MM;
+            ? positionMm() - LIMIT_BACKOFF_MM
+            : positionMm() + LIMIT_BACKOFF_MM;
         _limitBackoffActive = true;
         _limitBackoffStart  = now;
         startMoveToMm(target, LIMIT_BACKOFF_SPEED_MM_S);
