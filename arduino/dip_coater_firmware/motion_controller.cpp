@@ -51,6 +51,7 @@ MotionController::MotionController(StateMachine& sm)
     , _segCurrentDip(1)
     , _targetMm(0.0f)
     , _moveStartMm(0.0f)
+    , _profileStartMm(0.0f)
     , _dwellStartMs(0)
     , _dwellDurationMs(0)
     , _inDwell(false)
@@ -154,8 +155,8 @@ void MotionController::resume() {
     if (_mode == ProfileMode::TRAPEZOIDAL) {
         _currentDip = _pauseSnapshot.currentDip;
         RunPhase ph = _pauseSnapshot.phase;
-        if      (ph == RunPhase::DESCENDING)   startMoveToMm(-_depthMm, _dipSpeedMms);
-        else if (ph == RunPhase::ASCENDING)    startMoveToMm(0.0f, _withdrawSpeedMms);
+        if      (ph == RunPhase::DESCENDING)   startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
+        else if (ph == RunPhase::ASCENDING)    startMoveToMm(_profileStartMm, _withdrawSpeedMms);
         else if (ph == RunPhase::DWELL_BOTTOM) startDwell(_dwellBottomMs);
         else if (ph == RunPhase::DWELL_TOP)    startDwell(_dwellTopMs);
 
@@ -205,11 +206,12 @@ void MotionController::runProfile(float dipSpeedMms, float withdrawSpeedMms,
     _dwellTopMs       = (uint32_t)dwellTopMs;
     _nDips            = nDips;
     _currentDip       = 1;
+    _profileStartMm   = positionMm();          // dip relative to current position
     _mode             = ProfileMode::TRAPEZOIDAL;
     _sm.toRunning();
     _sm.setPhase(RunPhase::DESCENDING);
     TR2F("runProfile depth=", _depthMm, " dipSpd=", _dipSpeedMms);
-    startMoveToMm(-_depthMm, _dipSpeedMms);   // depth is positive magnitude; negate for downward position
+    startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
 }
 
 void MotionController::beginSegmentedMove(uint8_t nDips, uint16_t dwellBottomMs,
@@ -349,11 +351,11 @@ void MotionController::updateTrapezoidal() {
         if (phase == RunPhase::DWELL_BOTTOM) {
             TR("dwell_bottom done -> ASCENDING");
             _sm.setPhase(RunPhase::ASCENDING);
-            startMoveToMm(0.0f, _withdrawSpeedMms);
+            startMoveToMm(_profileStartMm, _withdrawSpeedMms);
         } else if (phase == RunPhase::DWELL_TOP) {
             TR("dwell_top done -> DESCENDING");
             _sm.setPhase(RunPhase::DESCENDING);
-            startMoveToMm(-_depthMm, _dipSpeedMms);
+            startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
         }
         return;
     }
@@ -474,6 +476,6 @@ void MotionController::updateMove() {
         _mode = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;
         _sm.toReady();
-        Serial.println("MOVING");
+        Serial.println("DONE MOVE");
     }
 }

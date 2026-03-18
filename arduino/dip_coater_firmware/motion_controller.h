@@ -98,7 +98,8 @@ private:
     int      _segCurrentDip;
 
     float    _targetMm;
-    float    _moveStartMm;   // position recorded at the start of each move
+    float    _moveStartMm;     // position recorded at the start of each move
+    float    _profileStartMm;  // position when runProfile() was called — dip/withdraw relative to this
 
     // Dwell
     uint32_t _dwellStartMs;
