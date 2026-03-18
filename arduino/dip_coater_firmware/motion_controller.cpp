@@ -306,13 +306,15 @@ bool MotionController::isDwellComplete() const {
 bool MotionController::isMoveComplete() {
     if (_inDwell) return false;
     if (!_stepper.getMotorState(STANDSTILL)) return false;
-    // Guard against false STANDSTILL in the first few loop() iterations after a move
-    // is commanded: don't accept completion until the motor has actually left its start
-    // position, unless the commanded distance was trivially small.
+    float pos      = positionMm();
     float travelMm = fabsf(_targetMm - _moveStartMm);
-    float movedMm  = fabsf(positionMm() - _moveStartMm);
+    float movedMm  = fabsf(pos - _moveStartMm);
+    float errorMm  = fabsf(pos - _targetMm);
+    // Reject false STANDSTILL if motor hasn't left start yet
     if (travelMm > 0.5f && movedMm < 1.0f) return false;
-    TR2F("isMoveComplete pos=", positionMm(), " target=", _targetMm);
+    // Reject false STANDSTILL mid-move: must be within 3 mm of target
+    if (travelMm > 0.5f && errorMm > 3.0f) return false;
+    TR2F("isMoveComplete pos=", pos, " target=", _targetMm);
     return true;
 }
 
