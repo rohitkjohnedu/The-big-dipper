@@ -282,6 +282,7 @@ float MotionController::getActualAccelMms2()      const { return 0.0f; }
 // =============================================================================
 
 void MotionController::startMoveToMm(float targetMm, float speedMms) {
+    if (!checkSoftLimit(targetMm)) return;   // estop + error state set inside
     _moveStartMm          = positionMm();
     TR2F("startMoveToMm pos=", _moveStartMm, " target=", targetMm);
     _targetMm             = targetMm;
@@ -320,6 +321,13 @@ bool MotionController::isMoveComplete() {
 
 bool MotionController::checkSoftLimit(float targetMm) {
     if (targetMm < _softLimitMinMm || targetMm > _softLimitMaxMm) {
+        Serial.print("ERR SOFT_LIMIT_EXCEEDED target=");
+        Serial.print(targetMm, 2);
+        Serial.print("mm limits=[");
+        Serial.print(_softLimitMinMm, 2);
+        Serial.print(", ");
+        Serial.print(_softLimitMaxMm, 2);
+        Serial.println("]");
         estop();
         _sm.toError(ErrorCode::SOFT_LIMIT_EXCEEDED);
         return false;
