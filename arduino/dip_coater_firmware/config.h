@@ -14,6 +14,7 @@
 // Homing
 #define HOMING_SPEED_MM_S         20.0f
 #define HOMING_BACKOFF_MM         5.0f
+#define HOMING_ACC_MM_S2          20.0f
 
 // Limit switch backoff — how far to move away after an endstop is hit
 #define LIMIT_BACKOFF_MM          5.0f

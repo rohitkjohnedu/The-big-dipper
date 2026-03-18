@@ -100,8 +100,8 @@ void MotionController::executeHome() {
     _commandedVelocityMms = HOMING_SPEED_MM_S;
     // CCW = UP toward top endstop. Swap to CW if direction is inverted.
     _stepper.setMaxVelocity(mmToDeg(HOMING_SPEED_MM_S));
-    _stepper.setMaxAcceleration(mmToDeg(HOMING_SPEED_MM_S));
-    _stepper.setMaxDeceleration(mmToDeg(HOMING_SPEED_MM_S));
+    _stepper.setMaxAcceleration(mmToDeg(HOMING_ACC_MM_S2));
+    _stepper.setMaxDeceleration(mmToDeg(HOMING_ACC_MM_S2));
     _stepper.runContinous(CCW);
 }
 
