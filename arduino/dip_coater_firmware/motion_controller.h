@@ -136,4 +136,5 @@ private:
     void updateTrapezoidal();
     void updateSegmented();
     void updateLimitBackoff();
+    void updateMove();
 };

@@ -125,6 +125,7 @@ void CommandParser::dispatchCmd(char* args) {
     if (strcmp(args, "RESUME") == 0)                    { cmdResume();         return; }
     if (strcmp(args, "RUN_LOADED_MOVE") == 0)           { cmdRunLoadedMove();  return; }
 
+    if (strncmp(args, "MOVE ",                 5)  == 0) { cmdMove(args + 5);                 return; }
     if (strncmp(args, "JOG ",                  4)  == 0) { cmdJog(args + 4);                  return; }
     if (strncmp(args, "RUN_PROFILE ",         12)  == 0) { cmdRunProfile(args + 12);          return; }
     if (strncmp(args, "BEGIN_SEGMENTED_MOVE ", 21) == 0) { cmdBeginSegmentedMove(args + 21);  return; }
@@ -190,6 +191,23 @@ void CommandParser::cmdResume() {
     }
     _mc.resume();
     ack("RESUME");
+}
+
+void CommandParser::cmdMove(char* p) {
+    if (_sm.getState() != SystemState::READY) {
+        err("MOVE", "invalid_state");
+        return;
+    }
+    float dist  = nextFloat(p);
+    float speed = nextFloat(p);
+    float accel = nextFloat(p);
+
+    if (speed <= 0.0f) speed = DEFAULT_DIP_SPEED_MM_S;
+    if (accel <= 0.0f) accel = DEFAULT_ACCEL_MM_S2;
+
+    _sm.toRunning();
+    _mc.moveByMm(dist, speed, accel);
+    ack("MOVE");
 }
 
 void CommandParser::cmdJog(char* p) {
@@ -388,6 +406,7 @@ void CommandParser::printHelp() {
     Serial.println("  CMD ESTOP");
     Serial.println("  CMD PAUSE");
     Serial.println("  CMD RESUME");
+    Serial.println("  CMD MOVE <dist_mm> [speed_mm_s] [accel_mm_s2]");
     Serial.println("  CMD JOG <UP|DOWN> <speed_mm_s>");
     Serial.println("  CMD RUN_PROFILE <dip_spd> <wdraw_spd> <accel> <depth_mm> <dwell_bot_ms> <dwell_top_ms> <n_dips>");
     Serial.println("  CMD BEGIN_SEGMENTED_MOVE <n_segs> <n_dips> <dwell_bot_ms> <dwell_top_ms>");

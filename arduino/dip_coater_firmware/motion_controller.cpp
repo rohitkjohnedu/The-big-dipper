@@ -86,7 +86,7 @@ void MotionController::update() {
         case ProfileMode::TRAPEZOIDAL: updateTrapezoidal(); break;
         case ProfileMode::SEGMENTED:   updateSegmented();   break;
         case ProfileMode::JOG:           break;   // library handles continuous motion
-        case ProfileMode::MOVING:        break;   // caller resets via stop()
+        case ProfileMode::MOVING:      updateMove();        break;
         case ProfileMode::LIMIT_BACKOFF: updateLimitBackoff(); break;
         case ProfileMode::NONE:          break;
     }
@@ -465,5 +465,15 @@ void MotionController::updateLimitBackoff() {
             _commandedVelocityMms = 0.0f;
             _sm.toReady();
         }
+    }
+}
+
+
+void MotionController::updateMove() {
+    if (isMoveComplete()) {
+        _mode = ProfileMode::NONE;
+        _commandedVelocityMms = 0.0f;
+        _sm.toReady();
+        Serial.println("MOVING");
     }
 }
