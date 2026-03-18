@@ -40,7 +40,7 @@ void Diagnostics::startMotorTest() {
     _startPos      = _mc->getPositionMm();
     _phaseStart    = millis();
     _moveStarted = false;
-    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // negative = down
+    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so -dist moves down
 }
 
 void Diagnostics::startMotorEncoderTest() {
@@ -57,7 +57,7 @@ void Diagnostics::startMotorEncoderTest() {
     _startPos      = _mc->getPositionMm();
     _phaseStart    = millis();
     _moveStarted   = false;
-    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // negative = down
+    _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so -dist moves down
 }
 
 void Diagnostics::startEndstopTest() {
@@ -188,7 +188,7 @@ void Diagnostics::updateMotorTest() {
             _moveStarted = false;
             _phaseStart  = now;
             _motorPhase  = MotorPhase::MOVE_UP;
-            _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // positive = up
+            _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so +dist moves up
             break;
         }
 
@@ -300,7 +300,7 @@ void Diagnostics::startCalMove(float mm) {
     _calEncoderMm   = 0.0f;
     _moveStarted    = false;
     _mode           = Mode::CAL_MOVE;
-    _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);
+    _mc->moveByMm(-mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, negate to match firmware
     Serial.print("DIAG:CAL:START commanded=");
     Serial.print(mm, 1);
     Serial.print("mm at ");

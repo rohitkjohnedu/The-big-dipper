@@ -12,7 +12,7 @@
 // Non-blocking — all timing via millis(). Never calls delay().
 //
 // Coordinate system:
-//   Home (top endstop) = 0 mm.  Positive mm = downward (dip direction).
+//   Home (top endstop) = 0 mm.  Positive mm = Upward.
 //   CCW = up,  CW = down.  Swap if wiring is reversed.
 // =============================================================================
 

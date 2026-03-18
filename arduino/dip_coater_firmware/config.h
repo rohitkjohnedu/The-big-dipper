@@ -44,3 +44,6 @@
 
 // Segmented move buffer
 #define MOVE_SEG_BUFFER_SIZE      64
+
+// Uncomment to trace key motion-controller calls to Serial (format: "TR <ms> <msg>")
+#define TRACE

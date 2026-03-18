@@ -1,6 +1,28 @@
 #include "motion_controller.h"
 
 // =============================================================================
+// Trace macros — enable with #define TRACE in config.h
+// Output format: "TR <millis> <message>"
+// =============================================================================
+
+#ifdef TRACE
+  #define TR(msg) do { \
+      Serial.print(F("TR ")); Serial.print(millis()); \
+      Serial.print(' '); Serial.println(F(msg)); } while(0)
+  #define TRF(msg, val) do { \
+      Serial.print(F("TRF ")); Serial.print(millis()); \
+      Serial.print(' '); Serial.print(F(msg)); Serial.println(val, 2); } while(0)
+  #define TR2F(msg, v1, sep, v2) do { \
+      Serial.print(F("TR2F ")); Serial.print(millis()); \
+      Serial.print(' '); Serial.print(F(msg)); Serial.print(v1, 2); \
+      Serial.print(F(sep)); Serial.println(v2, 2); } while(0)
+#else
+  #define TR(msg)
+  #define TRF(msg, val)
+  #define TR2F(msg, v1, sep, v2)
+#endif
+
+// =============================================================================
 // Unit conversion helpers
 // =============================================================================
 
@@ -206,6 +228,7 @@ void MotionController::runProfile(float dipSpeedMms, float withdrawSpeedMms,
     _mode             = ProfileMode::TRAPEZOIDAL;
     _sm.toRunning();
     _sm.setPhase(RunPhase::DESCENDING);
+    TR2F("runProfile depth=", _depthMm, " dipSpd=", _dipSpeedMms);
     startMoveToMm(_depthMm, _dipSpeedMms);
 }
 
@@ -277,6 +300,7 @@ float MotionController::getActualAccelMms2()      const { return 0.0f; }
 // =============================================================================
 
 void MotionController::startMoveToMm(float targetMm, float speedMms) {
+    TR2F("startMoveToMm pos=", positionMm(), " target=", targetMm);
     _targetMm             = targetMm;
     _commandedVelocityMms = speedMms;
     setSpeed(speedMms);
@@ -284,6 +308,7 @@ void MotionController::startMoveToMm(float targetMm, float speedMms) {
 }
 
 void MotionController::startDwell(uint32_t ms) {
+    TRF("startDwell ms=", (float)ms);
     _inDwell          = true;
     _dwellDurationMs  = ms;
     _dwellStartMs     = millis();
@@ -297,7 +322,9 @@ bool MotionController::isDwellComplete() const {
 
 bool MotionController::isMoveComplete() {
     if (_inDwell) return false;
-    return _stepper.getMotorState(STANDSTILL);
+    bool done = _stepper.getMotorState(STANDSTILL);
+    if (done) { TR2F("isMoveComplete pos=", positionMm(), " target=", _targetMm); }
+    return done;
 }
 
 bool MotionController::checkSoftLimit(float targetMm) {
@@ -333,9 +360,11 @@ void MotionController::updateTrapezoidal() {
         if (!isDwellComplete()) return;
         _inDwell = false;
         if (phase == RunPhase::DWELL_BOTTOM) {
+            TR("dwell_bottom done -> ASCENDING");
             _sm.setPhase(RunPhase::ASCENDING);
             startMoveToMm(0.0f, _withdrawSpeedMms);
         } else if (phase == RunPhase::DWELL_TOP) {
+            TR("dwell_top done -> DESCENDING");
             _sm.setPhase(RunPhase::DESCENDING);
             startMoveToMm(_depthMm, _dipSpeedMms);
         }
@@ -345,14 +374,17 @@ void MotionController::updateTrapezoidal() {
     if (!isMoveComplete()) return;
 
     if (phase == RunPhase::DESCENDING) {
+        TR("DESCENDING done -> DWELL_BOTTOM");
         _sm.setPhase(RunPhase::DWELL_BOTTOM);
         startDwell(_dwellBottomMs);
     } else if (phase == RunPhase::ASCENDING) {
         if (_currentDip < _nDips) {
             _currentDip++;
+            TR("ASCENDING done -> DWELL_TOP");
             _sm.setPhase(RunPhase::DWELL_TOP);
             startDwell(_dwellTopMs);
         } else {
+            TR("ASCENDING done -> profile complete");
             _mode = ProfileMode::NONE;
             _commandedVelocityMms = 0.0f;
             _sm.setPhase(RunPhase::NONE);
