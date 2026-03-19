@@ -75,6 +75,12 @@ void MotionController::begin() {
     _stepper.setup(NORMAL, MOTOR_STEPS_PER_REV,
                    10.0f, 0.0f, 0.0f,
                    16, false, 0, 50, 30);
+
+    // Override library default TPWMTHRS=5000 which forces SpreadCycle at any
+    // meaningful speed. Setting 0 keeps StealthChop active at all speeds.
+    _stepper.driver.writeRegister(TPWMTHRS,    STEALTH_TPWMTHRS);
+    // Delay before hold current activates — prevents click on stop.
+    _stepper.driver.writeRegister(TPOWERDOWN,  STEALTH_TPOWERDOWN);
 }
 
 // =============================================================================
@@ -101,11 +107,12 @@ void MotionController::executeHome() {
     _mode = ProfileMode::HOMING;
     _homingBackoffActive = false;
     _commandedVelocityMms = HOMING_SPEED_MM_S;
-    // CW = UP toward top endstop.
+    // Use positioning mode (moveAngle) rather than velocity mode (runContinous)
+    // so StealthChop works. Command more than max travel upward — endstop ISR stops it.
     _stepper.setMaxVelocity(mmToDeg(HOMING_SPEED_MM_S));
     _stepper.setMaxAcceleration(mmToDeg(HOMING_ACC_MM_S2));
     _stepper.setMaxDeceleration(mmToDeg(HOMING_ACC_MM_S2));
-    _stepper.runContinous(CW);
+    _stepper.moveAngle(mmToDeg(TRAVEL_MAX_MM));
 }
 
 void MotionController::setSoftLimits(float minMm, float maxMm) {
@@ -482,6 +489,7 @@ void MotionController::updateLimitBackoff() {
 
 
 void MotionController::updateMove() {
+    if (_sm.getState() != SystemState::RUNNING) return;   // diagnostics manages its own completion
     if (isMoveComplete()) {
         _mode = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;

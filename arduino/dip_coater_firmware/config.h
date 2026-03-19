@@ -43,6 +43,19 @@
 
 #define DEBUG_DEFAULT_ON          0
 
+// StealthChop tuning (TMC5130 registers written after setup())
+//
+// TPWMTHRS: crossover speed between StealthChop (quiet) and SpreadCycle (torque).
+//   StealthChop active when motor is SLOWER than this threshold.
+//   Formula: TPWMTHRS = 1562 / crossover_speed_mm_s
+//     1 mm/s → 1562,  2 mm/s → 781,  3 mm/s → 521,  5 mm/s → 312
+//   Set to 0 to force StealthChop at all speeds (motor will stall above ~2 mm/s).
+//   Tune upward if slow moves are noisy; downward if fast moves lose torque.
+#define STEALTH_TPWMTHRS          521    // crossover at ~3 mm/s
+// TPOWERDOWN: delay (~2 ms per step) before hold current activates after standstill.
+//   Prevents audible click when motor stops. 10 ≈ 20 ms.
+#define STEALTH_TPOWERDOWN        10
+
 // Segmented move buffer
 #define MOVE_SEG_BUFFER_SIZE      64
 
