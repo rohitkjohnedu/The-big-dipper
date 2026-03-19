@@ -90,11 +90,17 @@ void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
     _moveTestStart     = millis();
     _moveStarted       = false;
     _mode              = Mode::MOVE_TEST;
-    _mc->moveByMm(mm, speedMms, accelMms2);  // negate: positive mm = up (toward home)
+    _mc->moveByMm(mm, speedMms, accelMms2);
+    // If moveByMm hit a soft limit it calls estop() → ERROR state.
+    // Don't print START or run the test in that case.
+    if (_sm->getState() == SystemState::ERROR) {
+        _mode = Mode::INACTIVE;
+        return;
+    }
     Serial.print("DIAG:MOVE:START mm=");
     Serial.print(mm, 1);
     Serial.print(" speed=");
-    Serial.print(speedMms, 1);
+    Serial.print(speedMms, 3);
     Serial.print("mm/s accel=");
     Serial.print(accelMms2, 1);
     Serial.println("mm/s2");
