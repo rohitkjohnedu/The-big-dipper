@@ -84,7 +84,7 @@ private:
     float    _moveTestAccelMms2;
     uint32_t _moveTestStart;
 
-    // Position-stability tracker (shared by updateMoveTest and updateCalMove)
+    // Movement detection (used by updateMotorTest and updateCalMove)
     bool     _moveStarted;    // true once position has left start by > MOVE_START_MM
     float    _trackedPos;     // last position at which significant movement was seen
     uint32_t _stableSince;    // millis when position was last updated significantly
@@ -103,7 +103,7 @@ private:
 
     static constexpr float    DIAG_DIST_MM     =  5.0f;
     static constexpr float    TOLERANCE_MM     =  1.5f;
-    static constexpr uint32_t MOVE_TIMEOUT_MS  = 60000;   // 60s — no speed assumption needed
+    static constexpr uint32_t MOVE_TIMEOUT_MS  = 60000;   // 60s minimum — updateMoveTest scales up with distance/speed
     static constexpr uint32_t SETTLE_MS        =   300;   // ms of position stability = done
     static constexpr float    MOVE_START_MM    =   0.2f;  // movement detection threshold
     static constexpr float    STABLE_MM        =   0.05f; // max drift to count as settled

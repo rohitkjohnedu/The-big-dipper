@@ -33,7 +33,6 @@ MotionController::MotionController(StateMachine& sm)
     , _mode(ProfileMode::NONE)
     , _softLimitMinMm(SOFT_LIMIT_MIN_MM)
     , _softLimitMaxMm(SOFT_LIMIT_MAX_MM)
-    , _debugOn(DEBUG_DEFAULT_ON)
     , _commandedVelocityMms(0.0f)
     , _dipSpeedMms(DEFAULT_DIP_SPEED_MM_S)
     , _withdrawSpeedMms(DEFAULT_WITHDRAW_SPEED_MM_S)
@@ -55,7 +54,6 @@ MotionController::MotionController(StateMachine& sm)
     , _dwellStartMs(0)
     , _dwellDurationMs(0)
     , _inDwell(false)
-    , _movingStartMs(0)
     , _homingBackoffActive(false)
     , _limitTriggered(false)
     , _limitIsTop(false)
@@ -76,8 +74,8 @@ void MotionController::begin() {
                    10.0f, 0.0f, 0.0f,
                    16, false, 0, 50, 30);
 
-    // Override library default TPWMTHRS=5000 which forces SpreadCycle at any
-    // meaningful speed. Setting 0 keeps StealthChop active at all speeds.
+    // Set TPWMTHRS to crossover speed between StealthChop (quiet, below threshold)
+    // and SpreadCycle (more torque, above threshold). See config.h for value.
     _stepper.driver.writeRegister(TPWMTHRS,    STEALTH_TPWMTHRS);
     // Delay before hold current activates — prevents click on stop.
     _stepper.driver.writeRegister(TPOWERDOWN,  STEALTH_TPOWERDOWN);
@@ -119,8 +117,6 @@ void MotionController::setSoftLimits(float minMm, float maxMm) {
     _softLimitMinMm = minMm;
     _softLimitMaxMm = maxMm;
 }
-
-void MotionController::setDebug(bool on) { _debugOn = on; }
 
 void MotionController::stop() {
     _mode = ProfileMode::NONE;
@@ -185,13 +181,8 @@ void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) 
     float saved = _accelMms2;
     _accelMms2 = accelMms2;
     _mode = ProfileMode::MOVING;
-    _movingStartMs = millis();
     startMoveToMm(positionMm() + deltaMm, speedMms);
     _accelMms2 = saved;          // restore for normal profile moves
-}
-
-bool MotionController::isMoveDone() {
-    return isMoveComplete();
 }
 
 void MotionController::jog(bool up, float speedMms) {
@@ -496,7 +487,7 @@ void MotionController::updateMove() {
         _mode = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;
         _sm.toReady();
-        Serial.println("DONE MOVE");
+        Serial.println("CMD:MOVE:DONE");
     }
 }
 

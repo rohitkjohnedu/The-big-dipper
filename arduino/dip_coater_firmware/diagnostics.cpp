@@ -251,7 +251,7 @@ void Diagnostics::updateMotorTest() {
 }
 
 // =============================================================================
-// Move test — command a fixed distance, detect stop via position stability
+// Move test — command a fixed distance, detect completion via STANDSTILL signal
 // =============================================================================
 
 void Diagnostics::updateMoveTest() {
@@ -278,15 +278,14 @@ void Diagnostics::updateMoveTest() {
     // they fail below ~0.17 mm/s (motor moves less than STABLE_MM per SETTLE_MS).
     if (_mc->isStandstill() && !timedOut) return;
 
-    float actual        = currentPos - _moveTestStartPos;
-    float displayActual = actual;   // positive = up, matches user-facing convention
-    bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
+    float actual = currentPos - _moveTestStartPos;
+    bool  ok     = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
     Serial.print("DIAG:MOVE:");
     Serial.print(ok ? "PASS" : "FAIL");
     Serial.print(" commanded=");
     Serial.print(_moveTestDeltaMm, 1);
     Serial.print("mm actual=");
-    Serial.print(displayActual, 1);
+    Serial.print(actual, 1);
     Serial.println("mm");
 
     _mc->stop();
@@ -304,7 +303,7 @@ void Diagnostics::startCalMove(float mm) {
     _calEncoderMm   = 0.0f;
     _moveStarted    = false;
     _mode           = Mode::CAL_MOVE;
-    _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, negate to match firmware
+    _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);
     Serial.print("DIAG:CAL:START commanded=");
     Serial.print(mm, 1);
     Serial.print("mm at ");

@@ -41,8 +41,6 @@
 #define DEFAULT_DWELL_TOP_MS          500
 #define DEFAULT_N_DIPS                1
 
-#define DEBUG_DEFAULT_ON          0
-
 // StealthChop tuning (TMC5130 registers written after setup())
 //
 // TPWMTHRS: crossover speed between StealthChop (quiet) and SpreadCycle (torque).
@@ -59,5 +57,6 @@
 // Segmented move buffer
 #define MOVE_SEG_BUFFER_SIZE      64
 
-// Uncomment to trace key motion-controller calls to Serial (format: "TR <ms> <msg>")
-#define TRACE
+// Uncomment to trace key motion-controller calls to Serial (format: "TR <ms> <msg>").
+// Leave commented out in normal use — produces noisy output on every motion event.
+// #define TRACE

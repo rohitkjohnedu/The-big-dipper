@@ -74,7 +74,6 @@ private:
     void cmdRunLoadedMove();
     void cmdSetTelemRate(char* p);
     void cmdSetSoftLimits(char* p);
-    void cmdDebug(char* p);
 
     // Response helpers
     void ack(const char* cmd);

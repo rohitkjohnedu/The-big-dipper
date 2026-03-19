@@ -132,7 +132,6 @@ void CommandParser::dispatchCmd(char* args) {
     if (strncmp(args, "MOVE_SEG ",             9)  == 0) { cmdMoveSeg(args + 9);              return; }
     if (strncmp(args, "SET_TELEM_RATE ",       15) == 0) { cmdSetTelemRate(args + 15);        return; }
     if (strncmp(args, "SET_SOFT_LIMITS ",      16) == 0) { cmdSetSoftLimits(args + 16);       return; }
-    if (strncmp(args, "DEBUG ",                6)  == 0) { cmdDebug(args + 6);                return; }
 
     err(args, "unknown_cmd");
 }
@@ -338,13 +337,6 @@ void CommandParser::cmdSetSoftLimits(char* p) {
     ack("SET_SOFT_LIMITS");
 }
 
-void CommandParser::cmdDebug(char* p) {
-    while (*p == ' ') p++;
-    if (strcmp(p, "ON") == 0)       { _mc.setDebug(true);  ack("DEBUG"); }
-    else if (strcmp(p, "OFF") == 0) { _mc.setDebug(false); ack("DEBUG"); }
-    else                            { err("DEBUG", "expected_ON_or_OFF"); }
-}
-
 // =============================================================================
 // DIAG dispatch — mirrors the handling previously in .ino dispatchCommand()
 // =============================================================================
@@ -363,31 +355,29 @@ void CommandParser::dispatchDiag(char* line) {
     } else if (strcmp(line, "DIAG JOG STOP") == 0) {
         _diag.exit();
     } else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
-        char* p = line + 13;
-        float spd = *p ? atof(p) : 5.0f;
-        _diag.startJog(false, spd);
+        char* p   = line + 13;
+        float spd = nextFloat(p);
+        _diag.startJog(false, spd > 0.0f ? spd : 5.0f);
     } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
-        char* p = line + 11;
-        float spd = *p ? atof(p) : 5.0f;
-        _diag.startJog(true, spd);
+        char* p   = line + 11;
+        float spd = nextFloat(p);
+        _diag.startJog(true, spd > 0.0f ? spd : 5.0f);
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
-        char* p = line + 9;
-        float mm    = *p ? atof(p) : 10.0f;
-        while (*p == ' ') p++;
-        while (*p && *p != ' ') p++;
-        float speed = *p ? atof(p) : 0.0f;
-        while (*p == ' ') p++;
-        while (*p && *p != ' ') p++;
-        float accel = *p ? atof(p) : 0.0f;
-        _diag.startMoveTest(mm,
-                            speed > 0.0f ? speed : Diagnostics::DIAG_SPEED_MMS,
-                            accel > 0.0f ? accel : Diagnostics::DIAG_ACCEL_MMS2);
+        char* p     = line + 9;
+        float mm    = nextFloat(p);
+        float speed = nextFloat(p);
+        float accel = nextFloat(p);
+        _diag.startMoveTest(mm    != 0.0f ? mm    : 10.0f,
+                            speed > 0.0f  ? speed : Diagnostics::DIAG_SPEED_MMS,
+                            accel > 0.0f  ? accel : Diagnostics::DIAG_ACCEL_MMS2);
     } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
-        float mm = *(line + 15) ? atof(line + 15) : 0.0f;
+        char* p  = line + 15;
+        float mm = nextFloat(p);
         _diag.computeCalResult(mm);
     } else if (strncmp(line, "DIAG CAL", 8) == 0) {
-        float mm = *(line + 8) ? atof(line + 8) : 50.0f;
-        _diag.startCalMove(mm);
+        char* p  = line + 8;
+        float mm = nextFloat(p);
+        _diag.startCalMove(mm != 0.0f ? mm : 50.0f);
     } else {
         Serial.print("ERR unknown_diag_command: ");
         Serial.println(line);
@@ -414,7 +404,6 @@ void CommandParser::printHelp() {
     Serial.println("  CMD RUN_LOADED_MOVE");
     Serial.println("  CMD SET_TELEM_RATE <hz>               (0=off, max 50)");
     Serial.println("  CMD SET_SOFT_LIMITS <min_mm> <max_mm>");
-    Serial.println("  CMD DEBUG <ON|OFF>");
     Serial.println("--- Diagnostics commands (DIAG) ---");
     Serial.println("  DIAG MOTOR              move down 5mm then up 5mm");
     Serial.println("  DIAG MOTORENCODER       same + encoder pass/fail check");

@@ -26,7 +26,6 @@ public:
     // Commands — called by CommandParser
     void executeHome();
     void setSoftLimits(float minMm, float maxMm);
-    void setDebug(bool on);
     void stop();
     void estop();
     void pause();
@@ -42,7 +41,6 @@ public:
 
     // Single relative move — used by Diagnostics
     void moveByMm(float deltaMm, float speedMms, float accelMms2);
-    bool isMoveDone();
 
     // ISR callback — wire to endstop interrupt handlers in .ino
     void onEndstopTriggered(bool isTop);
@@ -59,7 +57,7 @@ private:
     enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG, LIMIT_BACKOFF, MOVING };
 
     struct Segment {
-        float distMm;    // signed: +ve = down
+        float distMm;    // signed, same convention as moveByMm (+ve = up)
         float speedMms;
     };
 
@@ -77,7 +75,6 @@ private:
     ProfileMode _mode;
     float _softLimitMinMm;
     float _softLimitMaxMm;
-    bool  _debugOn;
     float _commandedVelocityMms;
 
     // Trapezoidal profile
@@ -108,9 +105,6 @@ private:
     uint32_t _dwellDurationMs;
     bool     _inDwell;
 
-    // Single move (moveByMm)
-    uint32_t _movingStartMs;
-
     // Homing
     bool _homingBackoffActive;
 
@@ -140,6 +134,4 @@ private:
     void updateSegmented();
     void updateLimitBackoff();
     void updateMove();
-
-
 };
