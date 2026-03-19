@@ -1,5 +1,9 @@
 #include "state_machine.h"
 
+// =============================================================================
+// Constructor
+// =============================================================================
+
 StateMachine::StateMachine()
     : _state(SystemState::IDLE)
     , _phase(RunPhase::NONE)
@@ -7,10 +11,18 @@ StateMachine::StateMachine()
     , _homed(false)
 {}
 
+// =============================================================================
+// Getters
+// =============================================================================
+
 SystemState StateMachine::getState() const { return _state; }
 RunPhase    StateMachine::getPhase() const { return _phase; }
 ErrorCode   StateMachine::getError() const { return _error; }
 bool        StateMachine::isHomed()  const { return _homed; }
+
+// =============================================================================
+// State transitions
+// =============================================================================
 
 void StateMachine::toHoming() {
     _state = SystemState::HOMING;
@@ -40,10 +52,18 @@ void StateMachine::toError(ErrorCode code) {
 
 void StateMachine::setPhase(RunPhase phase) { _phase = phase; }
 
+// =============================================================================
+// Capability queries
+// =============================================================================
+
 bool StateMachine::canRun()    const { return _state == SystemState::READY;   }
 bool StateMachine::canPause()  const { return _state == SystemState::RUNNING; }
 bool StateMachine::canResume() const { return _state == SystemState::PAUSED;  }
 bool StateMachine::canJog()    const { return _state == SystemState::READY;   }
+
+// =============================================================================
+// String helpers
+// =============================================================================
 
 const char* StateMachine::stateString() const {
     switch (_state) {

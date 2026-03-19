@@ -4,6 +4,7 @@
 // Number parsing helpers — avoid sscanf (unreliable on STM32)
 // =============================================================================
 
+/** @brief Advance past spaces in *p, then parse and return a float. */
 static float nextFloat(char*& p) {
     while (*p == ' ') p++;
     char* end;
@@ -12,6 +13,7 @@ static float nextFloat(char*& p) {
     return v;
 }
 
+/** @brief Advance past spaces in *p, then parse and return a long integer. */
 static long nextLong(char*& p) {
     while (*p == ' ') p++;
     char* end;
@@ -25,15 +27,20 @@ static long nextLong(char*& p) {
 // =============================================================================
 
 CommandParser::CommandParser(StateMachine& sm, MotionController& mc, Diagnostics& diag)
-    : _sm(sm), _mc(mc), _diag(diag), _telem(nullptr)
+    : _sm(sm)
+    , _mc(mc)
+    , _diag(diag)
+    , _telem(nullptr)
     , _len(0)
     , _telemRateHz(DEFAULT_TELEM_RATE_HZ)
-    , _collectingSegs(false), _segTotal(0), _segReceived(0)
+    , _collectingSegs(false)
+    , _segTotal(0)
+    , _segReceived(0)
 {}
 
 void CommandParser::begin() {
-    _len             = 0;
-    _collectingSegs  = false;
+    _len            = 0;
+    _collectingSegs = false;
 }
 
 void CommandParser::setTelemetry(Telemetry* telem) {
@@ -88,16 +95,8 @@ void CommandParser::dispatch(char* line) {
         printHelp();
         return;
     }
-
-    if (strncmp(line, "DIAG", 4) == 0) {
-        dispatchDiag(line);
-        return;
-    }
-
-    if (strncmp(line, "CMD ", 4) == 0) {
-        dispatchCmd(line + 4);
-        return;
-    }
+    if (strncmp(line, "DIAG", 4) == 0) { dispatchDiag(line);      return; }
+    if (strncmp(line, "CMD ",  4) == 0) { dispatchCmd(line + 4);   return; }
 
     Serial.print("ERR unknown_command: ");
     Serial.println(line);
@@ -108,30 +107,32 @@ void CommandParser::dispatch(char* line) {
 // =============================================================================
 
 void CommandParser::dispatchCmd(char* args) {
-    // While collecting segments, only MOVE_SEG and ESTOP are accepted
+    // While collecting segments only MOVE_SEG and ESTOP are accepted
     if (_collectingSegs) {
         if (strncmp(args, "MOVE_SEG ", 9) == 0) { cmdMoveSeg(args + 9); return; }
-        if (strcmp(args, "ESTOP") == 0)          { cmdEstop(); return; }
+        if (strcmp(args,  "ESTOP")     == 0)     { cmdEstop();           return; }
         _collectingSegs = false;
         err("CMD", "segment_collection_aborted — only MOVE_SEG or ESTOP accepted");
         return;
     }
 
-    if (strcmp(args, "HOME") == 0)                      { cmdHome();           return; }
-    if (strcmp(args, "GET_STATE") == 0)                 { cmdGetState();       return; }
-    if (strcmp(args, "STOP") == 0)                      { cmdStop();           return; }
-    if (strcmp(args, "ESTOP") == 0)                     { cmdEstop();          return; }
-    if (strcmp(args, "PAUSE") == 0)                     { cmdPause();          return; }
-    if (strcmp(args, "RESUME") == 0)                    { cmdResume();         return; }
-    if (strcmp(args, "RUN_LOADED_MOVE") == 0)           { cmdRunLoadedMove();  return; }
+    // Zero-argument commands
+    if (strcmp(args, "HOME")           == 0) { cmdHome();          return; }
+    if (strcmp(args, "GET_STATE")      == 0) { cmdGetState();      return; }
+    if (strcmp(args, "STOP")           == 0) { cmdStop();          return; }
+    if (strcmp(args, "ESTOP")          == 0) { cmdEstop();         return; }
+    if (strcmp(args, "PAUSE")          == 0) { cmdPause();         return; }
+    if (strcmp(args, "RESUME")         == 0) { cmdResume();        return; }
+    if (strcmp(args, "RUN_LOADED_MOVE")== 0) { cmdRunLoadedMove(); return; }
 
-    if (strncmp(args, "MOVE ",                 5)  == 0) { cmdMove(args + 5);                 return; }
-    if (strncmp(args, "JOG ",                  4)  == 0) { cmdJog(args + 4);                  return; }
-    if (strncmp(args, "RUN_PROFILE ",         12)  == 0) { cmdRunProfile(args + 12);          return; }
-    if (strncmp(args, "BEGIN_SEGMENTED_MOVE ", 21) == 0) { cmdBeginSegmentedMove(args + 21);  return; }
-    if (strncmp(args, "MOVE_SEG ",             9)  == 0) { cmdMoveSeg(args + 9);              return; }
-    if (strncmp(args, "SET_TELEM_RATE ",       15) == 0) { cmdSetTelemRate(args + 15);        return; }
-    if (strncmp(args, "SET_SOFT_LIMITS ",      16) == 0) { cmdSetSoftLimits(args + 16);       return; }
+    // Commands with arguments
+    if (strncmp(args, "MOVE ",                 5)  == 0) { cmdMove(args + 5);                return; }
+    if (strncmp(args, "JOG ",                  4)  == 0) { cmdJog(args + 4);                 return; }
+    if (strncmp(args, "RUN_PROFILE ",         12)  == 0) { cmdRunProfile(args + 12);         return; }
+    if (strncmp(args, "BEGIN_SEGMENTED_MOVE ", 21) == 0) { cmdBeginSegmentedMove(args + 21); return; }
+    if (strncmp(args, "MOVE_SEG ",             9)  == 0) { cmdMoveSeg(args + 9);             return; }
+    if (strncmp(args, "SET_TELEM_RATE ",       15) == 0) { cmdSetTelemRate(args + 15);       return; }
+    if (strncmp(args, "SET_SOFT_LIMITS ",      16) == 0) { cmdSetSoftLimits(args + 16);      return; }
 
     err(args, "unknown_cmd");
 }
@@ -216,7 +217,7 @@ void CommandParser::cmdJog(char* p) {
     }
     // p = "UP <speed>" or "DOWN <speed>"
     bool up;
-    if (strncmp(p, "UP ", 3) == 0)        { up = true;  p += 3; }
+    if      (strncmp(p, "UP ",   3) == 0) { up = true;  p += 3; }
     else if (strncmp(p, "DOWN ", 5) == 0) { up = false; p += 5; }
     else { err("JOG", "bad_args"); return; }
 
@@ -232,13 +233,13 @@ void CommandParser::cmdRunProfile(char* p) {
         err("RUN_PROFILE", "invalid_state");
         return;
     }
-    float dipSpd    = nextFloat(p);
-    float wdrawSpd  = nextFloat(p);
-    float accel     = nextFloat(p);
-    float depth     = nextFloat(p);
-    long  dwellBot  = nextLong(p);
-    long  dwellTop  = nextLong(p);
-    long  nDips     = nextLong(p);
+    float dipSpd   = nextFloat(p);
+    float wdrawSpd = nextFloat(p);
+    float accel    = nextFloat(p);
+    float depth    = nextFloat(p);
+    long  dwellBot = nextLong(p);
+    long  dwellTop = nextLong(p);
+    long  nDips    = nextLong(p);
 
     if (dipSpd <= 0 || wdrawSpd <= 0 || accel <= 0 || depth <= 0 || nDips <= 0) {
         err("RUN_PROFILE", "invalid_params");
@@ -285,7 +286,7 @@ void CommandParser::cmdMoveSeg(char* p) {
         _collectingSegs = false;
         return;
     }
-    if (!_mc.addSegment(dist, speed)) {   // positive mm = up, matches firmware convention
+    if (!_mc.addSegment(dist, speed)) {
         err("MOVE_SEG", "seg_buffer_overflow");
         _collectingSegs = false;
         _sm.toError(ErrorCode::SEG_BUFFER_OVERFLOW);
@@ -323,12 +324,14 @@ void CommandParser::cmdSetTelemRate(char* p) {
 }
 
 void CommandParser::cmdSetSoftLimits(char* p) {
-    if (_sm.getState() != SystemState::READY && _sm.getState() != SystemState::IDLE) {
+    SystemState s = _sm.getState();
+    if (s != SystemState::READY && s != SystemState::IDLE) {
         err("SET_SOFT_LIMITS", "invalid_state");
         return;
     }
     float minMm = nextFloat(p);
     float maxMm = nextFloat(p);
+
     if (minMm >= maxMm) {
         err("SET_SOFT_LIMITS", "min_must_be_less_than_max");
         return;
@@ -338,46 +341,46 @@ void CommandParser::cmdSetSoftLimits(char* p) {
 }
 
 // =============================================================================
-// DIAG dispatch — mirrors the handling previously in .ino dispatchCommand()
+// DIAG dispatch
 // =============================================================================
 
 void CommandParser::dispatchDiag(char* line) {
-    if (strcmp(line, "DIAG MOTOR") == 0) {
-        _diag.startMotorTest();
-    } else if (strcmp(line, "DIAG MOTORENCODER") == 0) {
-        _diag.startMotorEncoderTest();
-    } else if (strcmp(line, "DIAG ENDSTOP") == 0) {
-        _diag.startEndstopTest();
-    } else if (strcmp(line, "DIAG EXIT") == 0) {
-        _diag.exit();
-    } else if (strcmp(line, "DIAG POS") == 0) {
-        _diag.printPosition();
-    } else if (strcmp(line, "DIAG JOG STOP") == 0) {
-        _diag.exit();
-    } else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
+    if      (strcmp(line, "DIAG MOTOR")       == 0) { _diag.startMotorTest();        return; }
+    else if (strcmp(line, "DIAG MOTORENCODER")== 0) { _diag.startMotorEncoderTest(); return; }
+    else if (strcmp(line, "DIAG ENDSTOP")     == 0) { _diag.startEndstopTest();      return; }
+    else if (strcmp(line, "DIAG EXIT")        == 0) { _diag.exit();                  return; }
+    else if (strcmp(line, "DIAG POS")         == 0) { _diag.printPosition();         return; }
+    else if (strcmp(line, "DIAG JOG STOP")    == 0) { _diag.exit();                  return; }
+
+    else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
         char* p   = line + 13;
         float spd = nextFloat(p);
         _diag.startJog(false, spd > 0.0f ? spd : 5.0f);
+
     } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
         char* p   = line + 11;
         float spd = nextFloat(p);
         _diag.startJog(true, spd > 0.0f ? spd : 5.0f);
+
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
         char* p     = line + 9;
         float mm    = nextFloat(p);
         float speed = nextFloat(p);
         float accel = nextFloat(p);
         _diag.startMoveTest(mm    != 0.0f ? mm    : 10.0f,
-                            speed > 0.0f  ? speed : Diagnostics::DIAG_SPEED_MMS,
-                            accel > 0.0f  ? accel : Diagnostics::DIAG_ACCEL_MMS2);
+                            speed >  0.0f ? speed : Diagnostics::DIAG_SPEED_MMS,
+                            accel >  0.0f ? accel : Diagnostics::DIAG_ACCEL_MMS2);
+
     } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
         char* p  = line + 15;
         float mm = nextFloat(p);
         _diag.computeCalResult(mm);
+
     } else if (strncmp(line, "DIAG CAL", 8) == 0) {
         char* p  = line + 8;
         float mm = nextFloat(p);
         _diag.startCalMove(mm != 0.0f ? mm : 50.0f);
+
     } else {
         Serial.print("ERR unknown_diag_command: ");
         Serial.println(line);

@@ -1,16 +1,24 @@
 // =============================================================================
-// dip_coater_firmware.ino  — Main sketch
+// dip_coater_firmware.ino — Main sketch
 //
-// Board  : uStepper S32 (Tools > Board > uStepper STM32 Boards)
-// Library: uStepperS32 (Library Manager)
+// Board  : uStepper S32  (Tools > Board > uStepper STM32 Boards)
+// Library: uStepperS32   (Library Manager)
 // Baud   : 115200
 //
-// Architecture:
-//   StateMachine    — tracks system state (IDLE/HOMING/READY/RUNNING/PAUSED/ERROR)
-//   MotionController— owns the stepper, executes all motion
-//   Diagnostics     — hardware self-test triggered by serial command
-//   CommandParser   — owns all serial I/O, dispatches CMD and DIAG commands
-//   Telemetry       — streams position/velocity to Python UI (step 7 — TODO)
+// Module overview
+// ---------------
+//   StateMachine     — tracks system state (IDLE / HOMING / READY / RUNNING /
+//                      PAUSED / ERROR) and the active run phase
+//   MotionController — owns the stepper driver, executes all motion commands
+//   Diagnostics      — hardware self-tests triggered by serial DIAG commands
+//   CommandParser    — owns all serial I/O, dispatches CMD and DIAG commands
+//   Telemetry        — streams position/velocity to Python UI  (step 7 — TODO)
+//
+// Coordinate system
+// -----------------
+//   Home (top endstop) = 0 mm
+//   Positive mm        = upward   (toward home)
+//   Negative mm        = downward (into solution)
 // =============================================================================
 
 #include "config.h"
@@ -19,25 +27,36 @@
 #include "diagnostics.h"
 #include "command_parser.h"
 
-// --- Global objects ----------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Global objects
+// -----------------------------------------------------------------------------
+
 StateMachine     sm;
 MotionController mc(sm);
 Diagnostics      diag;
 CommandParser    commandParser(sm, mc, diag);
 
-// --- Endstop ISR wrappers ----------------------------------------------------
-// In ENDSTOP_TEST mode the ISR is bypassed so manual triggers don't trip the
-// limit backoff logic.
+// -----------------------------------------------------------------------------
+// Endstop ISR wrappers
+//
+// While ENDSTOP_TEST mode is active, manual endstop triggers are absorbed here
+// so they do not activate the limit-backoff logic in MotionController.
+// -----------------------------------------------------------------------------
+
 void onBottomEndstop() {
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(false);
 }
+
 void onTopEndstop() {
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(true);
 }
 
 // =============================================================================
+// setup()
+// =============================================================================
+
 void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     while (!Serial) { delay(10); }
@@ -55,9 +74,13 @@ void setup() {
     Serial.println("Type HELP for command list.");
 }
 
+// =============================================================================
+// loop()
+// =============================================================================
+
 void loop() {
-    commandParser.update();
-    mc.update();
-    diag.update();
-    // TODO step 7: telemetry.update() here
+    commandParser.update();   // read serial, dispatch commands
+    mc.update();              // service active motion mode
+    diag.update();            // service active diagnostic test
+    // TODO step 7: telemetry.update();
 }

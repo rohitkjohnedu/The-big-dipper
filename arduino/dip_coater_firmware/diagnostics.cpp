@@ -6,16 +6,29 @@
 // =============================================================================
 
 Diagnostics::Diagnostics()
-    : _mc(nullptr), _sm(nullptr)
+    : _mc(nullptr)
+    , _sm(nullptr)
     , _mode(Mode::INACTIVE)
     , _motorPhase(MotorPhase::JOG_DOWN)
-    , _phaseStart(0), _startPos(0.0f)
-    , _passed(0), _failed(0)
-    , _lastTop(false), _lastBot(false)
-    , _moveTestStartPos(0.0f), _moveTestDeltaMm(0.0f), _moveTestSpeedMms(DIAG_SPEED_MMS), _moveTestAccelMms2(DIAG_ACCEL_MMS2), _moveTestStart(0)
-    , _moveStarted(false), _trackedPos(0.0f), _stableSince(0)
+    , _phaseStart(0)
+    , _startPos(0.0f)
+    , _passed(0)
+    , _failed(0)
     , _checkEncoder(false)
-    , _calStartPos(0.0f), _calCommandedMm(0.0f), _calEncoderMm(0.0f), _calStart(0)
+    , _lastTop(false)
+    , _lastBot(false)
+    , _moveTestStartPos(0.0f)
+    , _moveTestDeltaMm(0.0f)
+    , _moveTestSpeedMms(DIAG_SPEED_MMS)
+    , _moveTestAccelMms2(DIAG_ACCEL_MMS2)
+    , _moveTestStart(0)
+    , _moveStarted(false)
+    , _trackedPos(0.0f)
+    , _stableSince(0)
+    , _calStartPos(0.0f)
+    , _calCommandedMm(0.0f)
+    , _calEncoderMm(0.0f)
+    , _calStart(0)
 {}
 
 void Diagnostics::begin(MotionController& mc, StateMachine& sm) {
@@ -33,15 +46,17 @@ void Diagnostics::startMotorTest() {
     Serial.print("mm speed=");
     Serial.print(DIAG_SPEED_MMS, 0);
     Serial.println("mm/s");
-    _mode          = Mode::MOTOR_TEST;
-    _motorPhase    = MotorPhase::MOVE_DOWN;
-    _passed        = 0;
-    _failed        = 0;
-    _checkEncoder  = false;
-    _startPos      = _mc->getPositionMm();
-    _phaseStart    = millis();
-    _moveStarted = false;
-    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so -dist moves down
+
+    _mode         = Mode::MOTOR_TEST;
+    _motorPhase   = MotorPhase::MOVE_DOWN;
+    _passed       = 0;
+    _failed       = 0;
+    _checkEncoder = false;
+    _startPos     = _mc->getPositionMm();
+    _phaseStart   = millis();
+    _moveStarted  = false;
+
+    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
 }
 
 void Diagnostics::startMotorEncoderTest() {
@@ -50,20 +65,23 @@ void Diagnostics::startMotorEncoderTest() {
     Serial.print("mm speed=");
     Serial.print(DIAG_SPEED_MMS, 0);
     Serial.println("mm/s");
-    _mode          = Mode::MOTOR_TEST;
-    _motorPhase    = MotorPhase::MOVE_DOWN;
-    _passed        = 0;
-    _failed        = 0;
-    _checkEncoder  = true;
-    _startPos      = _mc->getPositionMm();
-    _phaseStart    = millis();
-    _moveStarted   = false;
-    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so -dist moves down
+
+    _mode         = Mode::MOTOR_TEST;
+    _motorPhase   = MotorPhase::MOVE_DOWN;
+    _passed       = 0;
+    _failed       = 0;
+    _checkEncoder = true;
+    _startPos     = _mc->getPositionMm();
+    _phaseStart   = millis();
+    _moveStarted  = false;
+
+    _mc->moveByMm(DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
 }
 
 void Diagnostics::startEndstopTest() {
     Serial.println("DIAG:ENDSTOP:START");
     Serial.println("DIAG:ENDSTOP:Trigger each endstop manually. Send DIAG EXIT to stop.");
+
     _mode    = Mode::ENDSTOP_TEST;
     _lastTop = digitalRead(PIN_ENDSTOP_TOP)    == LOW;
     _lastBot = digitalRead(PIN_ENDSTOP_BOTTOM) == LOW;
@@ -72,6 +90,7 @@ void Diagnostics::startEndstopTest() {
 void Diagnostics::startJog(bool up, float speedMms) {
     _mode = Mode::JOG;
     _mc->jog(up, speedMms);
+
     Serial.print("DIAG:JOG:");
     Serial.print(up ? "UP:" : "DOWN:");
     Serial.println(speedMms, 1);
@@ -90,13 +109,16 @@ void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
     _moveTestStart     = millis();
     _moveStarted       = false;
     _mode              = Mode::MOVE_TEST;
+
     _mc->moveByMm(mm, speedMms, accelMms2);
-    // If moveByMm hit a soft limit it calls estop() → ERROR state.
+
+    // If moveByMm() hit a soft limit it calls estop() → ERROR state.
     // Don't print START or run the test in that case.
     if (_sm->getState() == SystemState::ERROR) {
         _mode = Mode::INACTIVE;
         return;
     }
+
     Serial.print("DIAG:MOVE:START mm=");
     Serial.print(mm, 1);
     Serial.print(" speed=");
@@ -107,7 +129,9 @@ void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
 }
 
 void Diagnostics::exit() {
-    if (_mode == Mode::MOTOR_TEST || _mode == Mode::JOG || _mode == Mode::MOVE_TEST) {
+    if (_mode == Mode::MOTOR_TEST ||
+        _mode == Mode::JOG        ||
+        _mode == Mode::MOVE_TEST) {
         _mc->stop();
     }
     _mode = Mode::INACTIVE;
@@ -126,13 +150,8 @@ void Diagnostics::update() {
 // =============================================================================
 
 void Diagnostics::check(const char* name, bool ok) {
-    if (ok) {
-        _passed++;
-        Serial.print("DIAG:PASS:");
-    } else {
-        _failed++;
-        Serial.print("DIAG:FAIL:");
-    }
+    if (ok) { _passed++; Serial.print("DIAG:PASS:"); }
+    else    { _failed++; Serial.print("DIAG:FAIL:"); }
     Serial.println(name);
 }
 
@@ -141,18 +160,12 @@ void Diagnostics::check(const char* name, bool ok) {
 // =============================================================================
 //
 // Phases:
-//  JOG_DOWN            — jog down for PRESENCE_MS
-//  JOG_DOWN_SETTLE     — wait SETTLE_MS for encoder to stabilise
-//  JOG_DOWN_CHECK      — verify encoder moved >= PRESENCE_MIN_MM; start homing
-//  HOME_WAIT           — wait for state machine to reach READY (homing done)
-//  HOME_CHECK          — emit pass/fail; jog down for accuracy test
-//  ACCURACY_DOWN       — jog down for ACCURACY_DOWN_MS
-//  ACCURACY_DOWN_SETTLE— wait SETTLE_MS
-//  ACCURACY_DOWN_CHECK — compare encoder vs commanded distance
-//  ACCURACY_UP         — jog up for ACCURACY_UP_MS
-//  ACCURACY_UP_SETTLE  — wait SETTLE_MS
-//  ACCURACY_UP_CHECK   — compare encoder vs commanded distance
-//  DONE                — print summary, deactivate
+//   MOVE_DOWN  — command DIAG_DIST_MM downward; wait for position to settle
+//   MOVE_UP    — command DIAG_DIST_MM upward;   wait for position to settle
+//   DONE       — print summary and deactivate
+//
+// The remaining MotorPhase values (JOG_DOWN … ACCURACY_UP_CHECK) are reserved
+// for a future extended motor characterisation test and are not yet active.
 //
 // =============================================================================
 
@@ -163,6 +176,7 @@ void Diagnostics::updateMotorTest() {
 
     switch (_motorPhase) {
 
+        // -----------------------------------------------------------------
         case MotorPhase::MOVE_DOWN: {
             if (timedOut) {
                 Serial.println("DIAG:MOTOR:FAIL timeout waiting for move down");
@@ -170,6 +184,8 @@ void Diagnostics::updateMotorTest() {
                 break;
             }
             float pos = _mc->getPositionMm();
+
+            // Wait for the motor to actually leave the start position
             if (!_moveStarted) {
                 if (fabsf(pos - _startPos) >= MOVE_START_MM) {
                     _moveStarted = true;
@@ -178,13 +194,15 @@ void Diagnostics::updateMotorTest() {
                 }
                 break;
             }
+
+            // Refresh stable-position timer while still moving
             if (fabsf(pos - _trackedPos) > STABLE_MM) {
                 _trackedPos  = pos;
                 _stableSince = now;
             }
             if ((now - _stableSince) < SETTLE_MS) break;
 
-            // Motor has settled — check encoder and start return move
+            // Motor has settled — optionally check encoder, then start return move
             if (_checkEncoder) {
                 float actual = pos - _startPos;
                 check("Move down", fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
@@ -195,10 +213,11 @@ void Diagnostics::updateMotorTest() {
             _moveStarted = false;
             _phaseStart  = now;
             _motorPhase  = MotorPhase::MOVE_UP;
-            _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);  // user convention: positive=up, so +dist moves up
+            _mc->moveByMm(-DIAG_DIST_MM, DIAG_SPEED_MMS, DIAG_ACCEL_MMS2);
             break;
         }
 
+        // -----------------------------------------------------------------
         case MotorPhase::MOVE_UP: {
             if (timedOut) {
                 Serial.println("DIAG:MOTOR:FAIL timeout waiting for move up");
@@ -206,6 +225,7 @@ void Diagnostics::updateMotorTest() {
                 break;
             }
             float pos = _mc->getPositionMm();
+
             if (!_moveStarted) {
                 if (fabsf(pos - _startPos) >= MOVE_START_MM) {
                     _moveStarted = true;
@@ -214,13 +234,14 @@ void Diagnostics::updateMotorTest() {
                 }
                 break;
             }
+
             if (fabsf(pos - _trackedPos) > STABLE_MM) {
                 _trackedPos  = pos;
                 _stableSince = now;
             }
             if ((now - _stableSince) < SETTLE_MS) break;
 
-            // Motor has settled — check encoder
+            // Motor has settled — optionally check encoder
             if (_checkEncoder) {
                 float actual = pos - _startPos;
                 check("Move up", fabsf(fabsf(actual) - DIAG_DIST_MM) <= TOLERANCE_MM);
@@ -231,6 +252,7 @@ void Diagnostics::updateMotorTest() {
             break;
         }
 
+        // -----------------------------------------------------------------
         case MotorPhase::DONE: {
             const char* tag = _checkEncoder ? "DIAG:MOTORENCODER:DONE" : "DIAG:MOTOR:DONE";
             if (_checkEncoder) {
@@ -253,19 +275,28 @@ void Diagnostics::updateMotorTest() {
 // =============================================================================
 // Move test — command a fixed distance, detect completion via STANDSTILL signal
 // =============================================================================
+//
+// Completion is detected by polling isStandstill() rather than a position-
+// stability heuristic, because the heuristic fails below ~0.17 mm/s (the
+// motor moves less than STABLE_MM per SETTLE_MS window at that speed).
+//
+// A dynamic timeout prevents false timeout failures at very slow speeds:
+//   timeoutMs = max(MOVE_TIMEOUT_MS,  3 × expected_travel_time)
+//
+// =============================================================================
 
 void Diagnostics::updateMoveTest() {
     uint32_t now        = millis();
     float    currentPos = _mc->getPositionMm();
-    // Dynamic timeout: at least MOVE_TIMEOUT_MS, or 3× the expected travel time.
-    // Prevents false timeout when a slow speed is commanded (e.g. 0.1 mm/s over 10 mm = 100 s).
-    uint32_t timeoutMs  = max(MOVE_TIMEOUT_MS,
-                              (uint32_t)((fabsf(_moveTestDeltaMm) / _moveTestSpeedMms) * 3000.0f));
-    bool     timedOut   = (now - _moveTestStart) >= timeoutMs;
 
+    // Dynamic timeout: at least MOVE_TIMEOUT_MS, or 3× the expected travel time.
+    uint32_t timeoutMs = max(MOVE_TIMEOUT_MS,
+                             (uint32_t)((fabsf(_moveTestDeltaMm) / _moveTestSpeedMms) * 3000.0f));
+    bool timedOut = (now - _moveTestStart) >= timeoutMs;
+
+    // Wait until the motor has actually left the start position — avoids a
+    // false "done" reading at t=0 before the motor begins stepping.
     if (!_moveStarted) {
-        // Wait until the motor has actually left the start position before
-        // checking STANDSTILL — avoids a false "done" at t=0.
         if (fabsf(currentPos - _moveTestStartPos) >= MOVE_START_MM) {
             _moveStarted = true;
         } else if (!timedOut) {
@@ -273,13 +304,12 @@ void Diagnostics::updateMoveTest() {
         }
     }
 
-    // Wait until the motor stops stepping (isStandstill() returns 0 when stopped)
-    // or the timeout expires.  Position-stability heuristics are not used because
-    // they fail below ~0.17 mm/s (motor moves less than STABLE_MM per SETTLE_MS).
+    // Wait for the motor to stop stepping, or for the timeout to expire.
     if (_mc->isStandstill() && !timedOut) return;
 
     float actual = currentPos - _moveTestStartPos;
     bool  ok     = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
+
     Serial.print("DIAG:MOVE:");
     Serial.print(ok ? "PASS" : "FAIL");
     Serial.print(" commanded=");
@@ -303,7 +333,9 @@ void Diagnostics::startCalMove(float mm) {
     _calEncoderMm   = 0.0f;
     _moveStarted    = false;
     _mode           = Mode::CAL_MOVE;
+
     _mc->moveByMm(mm, CAL_SPEED_MMS, DIAG_ACCEL_MMS2);
+
     Serial.print("DIAG:CAL:START commanded=");
     Serial.print(mm, 1);
     Serial.print("mm at ");
@@ -326,6 +358,7 @@ void Diagnostics::updateCalMove() {
         }
     }
 
+    // Refresh stable-position timer while still moving
     if (fabsf(currentPos - _trackedPos) > STABLE_MM) {
         _trackedPos  = currentPos;
         _stableSince = now;
@@ -335,7 +368,7 @@ void Diagnostics::updateCalMove() {
     if (!settled && !timedOut) return;
 
     float actual  = currentPos - _calStartPos;
-    _calEncoderMm = -actual;   // positive = down (matches physical measurement direction)
+    _calEncoderMm = -actual;   // positive = down, matching physical measurement direction
 
     Serial.print("DIAG:CAL:DONE encoder=");
     Serial.print(_calEncoderMm, 2);
@@ -352,8 +385,10 @@ void Diagnostics::computeCalResult(float actualMm) {
         Serial.println("DIAG:CAL:ERR no calibration move recorded - run DIAG CAL <mm> first");
         return;
     }
-    // If encoder reads X mm but physical displacement is Y mm, the leadscrew
-    // pitch constant is off by a factor of Y/X. Scale LEADSCREW_MM_PER_REV accordingly.
+
+    // If the encoder reads X mm but the physical displacement is Y mm, the
+    // leadscrew pitch constant is off by a factor of Y/X.
+    // Update LEADSCREW_MM_PER_REV in config.h with the new value.
     float correction  = actualMm / _calEncoderMm;
     float newMmPerRev = LEADSCREW_MM_PER_REV * correction;
 
@@ -364,6 +399,7 @@ void Diagnostics::computeCalResult(float actualMm) {
     Serial.print("mm actual=");
     Serial.print(actualMm, 2);
     Serial.println("mm");
+
     Serial.print("DIAG:CAL:correction=");
     Serial.print(correction, 4);
     if (fabsf(correction - 1.0f) < 0.01f) {
@@ -393,7 +429,7 @@ void Diagnostics::updateEndstopTest() {
     bool rawTop = digitalRead(PIN_ENDSTOP_TOP)    == LOW;
     bool rawBot = digitalRead(PIN_ENDSTOP_BOTTOM) == LOW;
 
-    // Top endstop
+    // --- Top endstop ---------------------------------------------------------
     if (rawTop != _lastTop) {
         if (!pendingTop) {
             pendingTop       = true;
@@ -409,7 +445,7 @@ void Diagnostics::updateEndstopTest() {
         pendingTop = false;
     }
 
-    // Bottom endstop
+    // --- Bottom endstop ------------------------------------------------------
     if (rawBot != _lastBot) {
         if (!pendingBot) {
             pendingBot       = true;
