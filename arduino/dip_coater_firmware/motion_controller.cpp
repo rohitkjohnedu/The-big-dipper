@@ -97,8 +97,6 @@ void MotionController::update() {
         case ProfileMode::LIMIT_BACKOFF: updateLimitBackoff(); break;
         case ProfileMode::NONE:          break;
     }
-
-    Serial.println(_stepper.getMotorState(STANDSTILL));
 }
 
 // =============================================================================
@@ -315,17 +313,16 @@ bool MotionController::isDwellComplete() const {
 
 bool MotionController::isMoveComplete() {
     if (_inDwell) return false;
-    if (!_stepper.getMotorState(STANDSTILL)) return false;
+    // getMotorState(STANDSTILL) returns 1 while the motor is actively stepping
+    // and 0 when it has stopped.  So "complete" = not stepping any more.
+    if (_stepper.getMotorState(STANDSTILL)) return false;
     float pos      = positionMm();
     float travelMm = fabsf(_targetMm - _moveStartMm);
     float movedMm  = fabsf(pos - _moveStartMm);
     float errorMm  = fabsf(pos - _targetMm);
-    // Reject false STANDSTILL if motor hasn't left start yet.
-    // Use half the commanded travel (min 0.2 mm) so short moves (e.g. 1 mm)
-    // are not blocked by float-precision rounding near the 1 mm boundary.
-    float startGuardMm = max(0.2f, travelMm * 0.5f);
-    if (travelMm > 0.5f && movedMm < startGuardMm) return false;
-    // Reject false STANDSTILL mid-move: must be within 3 mm of target
+    // Reject spurious early stop before motor has covered half the distance
+    if (travelMm > 0.5f && movedMm < travelMm * 0.5f) return false;
+    // Reject if still far from target (e.g. limit-switch stop mid-move)
     if (travelMm > 0.5f && errorMm > 3.0f) return false;
     TR2F("isMoveComplete pos=", pos, " target=", _targetMm);
     return true;
