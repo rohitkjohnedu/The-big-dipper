@@ -53,6 +53,8 @@ public:
     float getCommandedVelocityMms() const;
     float getActualAccelMms2()      const;
 
+    bool isStandstill();
+
 private:
     enum class ProfileMode : uint8_t { NONE, HOMING, TRAPEZOIDAL, SEGMENTED, JOG, LIMIT_BACKOFF, MOVING };
 
@@ -138,4 +140,6 @@ private:
     void updateSegmented();
     void updateLimitBackoff();
     void updateMove();
+
+
 };

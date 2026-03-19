@@ -270,7 +270,16 @@ void Diagnostics::updateMoveTest() {
     // Use hardware STANDSTILL signal for reliable completion detection at any speed.
     // Position-stability heuristics fail below ~0.17 mm/s because the motor moves
     // less than STABLE_MM (0.05 mm) per SETTLE_MS (300 ms) window.
-    if (!_mc->isMoveDone() && !timedOut) return;
+    bool moveDone = !_mc->isStandstill(); // _mc->isMoveDone();
+    static uint32_t lastDbgMs = 0;
+    if (now - lastDbgMs >= 500) {
+        lastDbgMs = now;
+        Serial.print("DIAG:MOVE:DBG pos=");
+        Serial.print(currentPos, 3);
+        Serial.print("mm standstill=");
+        Serial.println(moveDone ? "1" : "0");
+    }
+    if (!moveDone && !timedOut) return;
 
     float actual        = currentPos - _moveTestStartPos;
     float displayActual = actual;   // positive = up, matches user-facing convention

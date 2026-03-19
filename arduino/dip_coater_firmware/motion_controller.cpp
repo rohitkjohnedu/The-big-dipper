@@ -97,6 +97,8 @@ void MotionController::update() {
         case ProfileMode::LIMIT_BACKOFF: updateLimitBackoff(); break;
         case ProfileMode::NONE:          break;
     }
+
+    Serial.println(_stepper.getMotorState(STANDSTILL));
 }
 
 // =============================================================================
@@ -318,8 +320,11 @@ bool MotionController::isMoveComplete() {
     float travelMm = fabsf(_targetMm - _moveStartMm);
     float movedMm  = fabsf(pos - _moveStartMm);
     float errorMm  = fabsf(pos - _targetMm);
-    // Reject false STANDSTILL if motor hasn't left start yet
-    if (travelMm > 0.5f && movedMm < 1.0f) return false;
+    // Reject false STANDSTILL if motor hasn't left start yet.
+    // Use half the commanded travel (min 0.2 mm) so short moves (e.g. 1 mm)
+    // are not blocked by float-precision rounding near the 1 mm boundary.
+    float startGuardMm = max(0.2f, travelMm * 0.5f);
+    if (travelMm > 0.5f && movedMm < startGuardMm) return false;
     // Reject false STANDSTILL mid-move: must be within 3 mm of target
     if (travelMm > 0.5f && errorMm > 3.0f) return false;
     TR2F("isMoveComplete pos=", pos, " target=", _targetMm);
@@ -496,4 +501,8 @@ void MotionController::updateMove() {
         _sm.toReady();
         Serial.println("DONE MOVE");
     }
+}
+
+bool MotionController::isStandstill() {
+    return _stepper.getMotorState(STANDSTILL);
 }
