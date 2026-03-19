@@ -218,6 +218,8 @@ private:
     float _targetMm;         ///< Absolute target for the current move (mm)
     float _moveStartMm;      ///< Position recorded at the start of each move (mm)
     float _profileStartMm;   ///< Position when runProfile() was called (mm)
+    float _movingSpeedMms;   ///< Speed saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s)
+    float _movingAccelMms2;  ///< Accel saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s²)
 
     // Dwell state
     uint32_t _dwellStartMs;

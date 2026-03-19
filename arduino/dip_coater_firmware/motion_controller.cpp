@@ -60,6 +60,8 @@ MotionController::MotionController(StateMachine& sm)
     , _targetMm           (0.0f)
     , _moveStartMm        (0.0f)
     , _profileStartMm     (0.0f)
+    , _movingSpeedMms     (0.0f)
+    , _movingAccelMms2    (0.0f)
     , _dwellStartMs       (0)
     , _dwellDurationMs    (0)
     , _inDwell            (false)
@@ -187,6 +189,12 @@ void MotionController::resume() {
             }
         } else if (ph == RunPhase::DWELL_BOTTOM) startDwell(_segDwellBottomMs);
         else if   (ph == RunPhase::DWELL_TOP)    startDwell(_segDwellTopMs);
+
+    } else if (_mode == ProfileMode::MOVING) {
+        // Resume a paused CMD MOVE: re-command to the original target.
+        // _targetMm is preserved from the original moveByMm() call.
+        _accelMms2 = _movingAccelMms2;
+        startMoveToMm(_targetMm, _movingSpeedMms);
     }
 }
 
@@ -199,11 +207,13 @@ void MotionController::jog(bool up, float speedMms) {
 }
 
 void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) {
-    float saved = _accelMms2;
-    _accelMms2  = accelMms2;
-    _mode       = ProfileMode::MOVING;
+    _movingSpeedMms  = speedMms;    // saved so resume() can restart a paused CMD MOVE
+    _movingAccelMms2 = accelMms2;
+    float saved      = _accelMms2;
+    _accelMms2       = accelMms2;
+    _mode            = ProfileMode::MOVING;
     startMoveToMm(positionMm() + deltaMm, speedMms);
-    _accelMms2  = saved;    // restore so normal profile moves are unaffected
+    _accelMms2       = saved;       // restore so trapezoidal/segmented profiles are unaffected
 }
 
 void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
