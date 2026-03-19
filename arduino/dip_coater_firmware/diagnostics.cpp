@@ -251,32 +251,29 @@ void Diagnostics::updateMotorTest() {
 void Diagnostics::updateMoveTest() {
     uint32_t now        = millis();
     float    currentPos = _mc->getPositionMm();
-    bool     timedOut   = (now - _moveTestStart) >= MOVE_TIMEOUT_MS;
+    // Dynamic timeout: at least MOVE_TIMEOUT_MS, or 3× the expected travel time.
+    // Prevents false timeout when a slow speed is commanded (e.g. 0.1 mm/s over 10 mm = 100 s).
+    uint32_t timeoutMs  = max(MOVE_TIMEOUT_MS,
+                              (uint32_t)((fabsf(_moveTestDeltaMm) / _moveTestSpeedMms) * 3000.0f));
+    bool     timedOut   = (now - _moveTestStart) >= timeoutMs;
 
     if (!_moveStarted) {
         // Wait until the motor has actually left the start position before
-        // checking for stability — avoids a false "done" at t=0.
+        // checking STANDSTILL — avoids a false "done" at t=0.
         if (fabsf(currentPos - _moveTestStartPos) >= MOVE_START_MM) {
             _moveStarted = true;
-            _trackedPos  = currentPos;
-            _stableSince = now;
         } else if (!timedOut) {
             return;
         }
     }
 
-    // If position moved significantly, reset the stability timer.
-    if (fabsf(currentPos - _trackedPos) > STABLE_MM) {
-        _trackedPos  = currentPos;
-        _stableSince = now;
-    }
-
-    bool settled = (now - _stableSince) >= SETTLE_MS;
-    if (!settled && !timedOut) return;
+    // Use hardware STANDSTILL signal for reliable completion detection at any speed.
+    // Position-stability heuristics fail below ~0.17 mm/s because the motor moves
+    // less than STABLE_MM (0.05 mm) per SETTLE_MS (300 ms) window.
+    if (!_mc->isMoveDone() && !timedOut) return;
 
     float actual        = currentPos - _moveTestStartPos;
     float displayActual = actual;   // positive = up, matches user-facing convention
-
     bool ok = fabsf(fabsf(actual) - fabsf(_moveTestDeltaMm)) <= TOLERANCE_MM;
     Serial.print("DIAG:MOVE:");
     Serial.print(ok ? "PASS" : "FAIL");
