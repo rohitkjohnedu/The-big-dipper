@@ -7,16 +7,22 @@
 
 /** @brief Convert linear position (mm) to motor angle (degrees). */
 float MotionController::mmToDeg(float mm) const {
+    // The leadscrew converts one full revolution (360°) into LEADSCREW_MM_PER_REV
+    // of linear travel.  Dividing 360 by that pitch gives degrees per mm.
     return mm * (360.0f / LEADSCREW_MM_PER_REV);
 }
 
 /** @brief Return current encoder position in mm relative to home. */
 float MotionController::positionMm() {
+    // angleMoved() returns cumulative shaft rotation in degrees since setHome().
+    // Multiplying by (mm_per_rev / 360) converts to linear mm.
     return _stepper.angleMoved() * (LEADSCREW_MM_PER_REV / 360.0f);
 }
 
 /** @brief Return actual motor velocity in mm/s from the encoder RPM. */
 float MotionController::actualVelocityMms() {
+    // getRPM() gives shaft revolutions per minute.
+    // Multiplying by (mm_per_rev / 60) converts to mm per second.
     return _stepper.encoder.getRPM() * (LEADSCREW_MM_PER_REV / 60.0f);
 }
 
@@ -78,18 +84,23 @@ MotionController::MotionController(StateMachine& sm)
 // =============================================================================
 
 void MotionController::begin() {
-    // Parameters: mode, steps/rev, pTerm, iTerm, dTerm,
-    //             dropinStepSize, setHome, invert, runCurrent%, holdCurrent%
-    // invert = 0: verify on hardware — set to 1 if motor direction is reversed.
+    // Initialise the stepper driver with open-loop positioning mode (NORMAL).
+    // Parameters: mode, steps/rev, P/I/D gains, microstep size,
+    //             setHome, invertDirection, runCurrent%, holdCurrent%.
+    // invert=0: motor moves up on CW command — swap to 1 if wiring is reversed.
     _stepper.setup(NORMAL, MOTOR_STEPS_PER_REV,
                    10.0f, 0.0f, 0.0f,
                    16, false, 0, 50, 30);
 
-    // Set TPWMTHRS to the crossover speed between StealthChop (quiet, below
-    // threshold) and SpreadCycle (more torque, above threshold). See config.h.
+    // TPWMTHRS sets the velocity crossover between StealthChop (quiet) and
+    // SpreadCycle (higher torque).  Below this threshold the driver uses
+    // StealthChop; above it switches to SpreadCycle automatically.
+    // STEALTH_TPWMTHRS is tuned in config.h for ~3 mm/s crossover.
     _stepper.driver.writeRegister(TPWMTHRS,   STEALTH_TPWMTHRS);
 
-    // Delay before hold current activates — prevents audible click on stop.
+    // TPOWERDOWN delays the reduction to hold current after the motor stops.
+    // A short delay prevents the audible click caused by an immediate current
+    // drop while the rotor is still settling against the load.
     _stepper.driver.writeRegister(TPOWERDOWN, STEALTH_TPOWERDOWN);
 }
 
@@ -98,6 +109,9 @@ void MotionController::begin() {
 // =============================================================================
 
 void MotionController::update() {
+    // Dispatch to the handler for whichever motion mode is currently active.
+    // JOG and NONE have no update logic — the library drives continuous motion
+    // for JOG, and NONE means the motor is idle.
     switch (_mode) {
         case ProfileMode::HOMING:        updateHoming();        break;
         case ProfileMode::TRAPEZOIDAL:   updateTrapezoidal();   break;
@@ -119,8 +133,9 @@ void MotionController::executeHome() {
     _commandedVelocityMms = HOMING_SPEED_MM_S;
 
     // Use positioning mode (moveAngle) rather than velocity mode (runContinous)
-    // so StealthChop remains active.  Command more than max travel upward —
-    // the top-endstop ISR will hard-stop the motor.
+    // so StealthChop stays active — runContinuous forces SpreadCycle regardless
+    // of TPWMTHRS.  Command more than the maximum travel distance upward; the
+    // top-endstop ISR will hard-stop and zero the encoder when it fires.
     _stepper.setMaxVelocity(    mmToDeg(HOMING_SPEED_MM_S)  );
     _stepper.setMaxAcceleration(mmToDeg(HOMING_ACC_MM_S2)   );
     _stepper.setMaxDeceleration(mmToDeg(HOMING_ACC_MM_S2)   );
@@ -133,6 +148,8 @@ void MotionController::setSoftLimits(float minMm, float maxMm) {
 }
 
 void MotionController::stop() {
+    // Reset internal mode and dwell state so update() does nothing,
+    // then issue a soft-stop to let the motor decelerate naturally.
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
@@ -141,6 +158,8 @@ void MotionController::stop() {
 }
 
 void MotionController::estop() {
+    // Hard-stop cuts power immediately — no deceleration ramp.
+    // Also clears the paused flag so a stale resume() can't restart motion.
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
@@ -150,11 +169,16 @@ void MotionController::estop() {
 }
 
 void MotionController::pause() {
+    // Snapshot the entire motion state so resume() can restart exactly
+    // where we left off, regardless of which profile mode was active.
     _pauseSnapshot.mode       = _mode;
     _pauseSnapshot.phase      = _sm.getPhase();
     _pauseSnapshot.currentDip = _currentDip;
     _pauseSnapshot.segIndex   = _segIndex;
     _pauseSnapshot.segDip     = _segCurrentDip;
+
+    // Clear the active mode so update() stops running the profile,
+    // then soft-stop the motor and enter PAUSED state.
     _paused  = true;
     _mode    = ProfileMode::NONE;
     _inDwell = false;
@@ -163,27 +187,35 @@ void MotionController::pause() {
 }
 
 void MotionController::resume() {
+    // Guard: only proceed if a valid pause snapshot exists.
     if (!_paused) return;
 
+    // Restore mode and state machine before re-issuing the motion command.
     _paused = false;
     _mode   = _pauseSnapshot.mode;
     _sm.toRunning();
     _sm.setPhase(_pauseSnapshot.phase);
 
     if (_mode == ProfileMode::TRAPEZOIDAL) {
-        _currentDip      = _pauseSnapshot.currentDip;
-        RunPhase ph      = _pauseSnapshot.phase;
+        // Restore the dip counter, then restart whichever phase was active.
+        // For dwell phases, restart the dwell timer from zero (the remaining
+        // dwell time is not tracked — the full dwell repeats on resume).
+        _currentDip = _pauseSnapshot.currentDip;
+        RunPhase ph = _pauseSnapshot.phase;
         if      (ph == RunPhase::DESCENDING)   startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
         else if (ph == RunPhase::ASCENDING)    startMoveToMm(_profileStartMm,            _withdrawSpeedMms);
         else if (ph == RunPhase::DWELL_BOTTOM) startDwell(_dwellBottomMs);
         else if (ph == RunPhase::DWELL_TOP)    startDwell(_dwellTopMs);
 
     } else if (_mode == ProfileMode::SEGMENTED) {
+        // Restore segment index and dip counter, then restart the current
+        // segment from the motor's present position (not the original target).
         _segIndex      = _pauseSnapshot.segIndex;
         _segCurrentDip = _pauseSnapshot.segDip;
         RunPhase ph    = _pauseSnapshot.phase;
         if (ph == RunPhase::DESCENDING || ph == RunPhase::ASCENDING) {
             if (_segIndex < _segCount) {
+                // Use current position as the new start for this segment.
                 float target = getPositionMm() + _segments[_segIndex].distMm;
                 startMoveToMm(target, _segments[_segIndex].speedMms);
             }
@@ -191,8 +223,9 @@ void MotionController::resume() {
         else if   (ph == RunPhase::DWELL_TOP)    startDwell(_segDwellTopMs);
 
     } else if (_mode == ProfileMode::MOVING) {
-        // Resume a paused CMD MOVE: re-command to the original target.
-        // _targetMm is preserved from the original moveByMm() call.
+        // Resume a paused CMD MOVE: re-command to the original absolute target.
+        // _targetMm was set by the original moveByMm() call and is still valid.
+        // Restore the move's own accel before commanding the move.
         _accelMms2 = _movingAccelMms2;
         startMoveToMm(_targetMm, _movingSpeedMms);
     }
@@ -203,23 +236,34 @@ void MotionController::jog(bool up, float speedMms) {
     _commandedVelocityMms = speedMms;
     _accelMms2            = DEFAULT_ACCEL_MM_S2;
     setSpeed(speedMms);
-    _stepper.runContinous(up ? CW : CCW);   // CW = up, CCW = down
+    // runContinous drives the motor indefinitely in the given direction.
+    // CW = upward (toward home), CCW = downward — matches the coordinate system.
+    _stepper.runContinous(up ? CW : CCW);
 }
 
 void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) {
-    _movingSpeedMms  = speedMms;    // saved so resume() can restart a paused CMD MOVE
+    // Save the move parameters so resume() can restart if the move is paused.
+    _movingSpeedMms  = speedMms;
     _movingAccelMms2 = accelMms2;
-    float saved      = _accelMms2;
-    _accelMms2       = accelMms2;
-    _mode            = ProfileMode::MOVING;
+
+    // Temporarily apply this move's accel for the startMoveToMm() call, then
+    // restore the previous value so the trapezoidal/segmented profile params
+    // are not clobbered if moveByMm() is called from Diagnostics mid-profile.
+    float saved  = _accelMms2;
+    _accelMms2   = accelMms2;
+    _mode        = ProfileMode::MOVING;
+
+    // Convert the relative displacement to an absolute target by adding the
+    // current encoder position.  startMoveToMm() checks the soft limit.
     startMoveToMm(positionMm() + deltaMm, speedMms);
-    _accelMms2       = saved;       // restore so trapezoidal/segmented profiles are unaffected
+    _accelMms2   = saved;
 }
 
 void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
                                    float accelMms2,      float depthMm,
                                    int   dwellBottomMs,  int   dwellTopMs,
                                    int   nDips) {
+    // Store all profile parameters for use throughout the multi-dip sequence.
     _dipSpeedMms      = dipSpeedMms;
     _withdrawSpeedMms = withdrawSpeedMms;
     _accelMms2        = accelMms2;
@@ -228,7 +272,13 @@ void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
     _dwellTopMs       = (uint32_t)dwellTopMs;
     _nDips            = nDips;
     _currentDip       = 1;
-    _profileStartMm   = positionMm();   // dip depth is relative to current position
+
+    // Record the position at profile start so all dips use the same top
+    // reference point regardless of small encoder drift.
+    _profileStartMm   = positionMm();
+
+    // Transition to RUNNING and immediately start the first descent.
+    // The dip target is _profileStartMm minus depthMm (downward = negative).
     _mode             = ProfileMode::TRAPEZOIDAL;
     _sm.toRunning();
     _sm.setPhase(RunPhase::DESCENDING);
@@ -239,6 +289,9 @@ void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
 void MotionController::beginSegmentedMove(uint8_t nDips,
                                            uint16_t dwellBottomMs,
                                            uint16_t dwellTopMs) {
+    // Reset the segment buffer and store the repeat / dwell parameters.
+    // Segments are appended by subsequent addSegment() calls; the move does
+    // not start until runLoadedMove() is called.
     _segNDips         = nDips;
     _segDwellBottomMs = dwellBottomMs;
     _segDwellTopMs    = dwellTopMs;
@@ -248,7 +301,9 @@ void MotionController::beginSegmentedMove(uint8_t nDips,
 }
 
 bool MotionController::addSegment(float distMm, float speedMms) {
+    // Reject the segment if the buffer is already full.
     if (_segCount >= MOVE_SEG_BUFFER_SIZE) return false;
+    
     _segments[_segCount].distMm   = distMm;
     _segments[_segCount].speedMms = speedMms;
     _segCount++;
@@ -256,7 +311,9 @@ bool MotionController::addSegment(float distMm, float speedMms) {
 }
 
 void MotionController::runLoadedMove() {
-    if (_segCount == 0) return;
+    if (_segCount == 0) return;   // nothing to run
+
+    // Reset execution pointers and immediately start the first segment.
     _segIndex      = 0;
     _segCurrentDip = 1;
     _mode          = ProfileMode::SEGMENTED;
@@ -271,25 +328,32 @@ void MotionController::runLoadedMove() {
 // =============================================================================
 
 void MotionController::onEndstopTriggered(bool isTop) {
-    // During homing the top endstop is expected — zero the encoder and back off.
+    // ---- Expected trigger: top endstop during homing -------------------------
+    // Zero the encoder at this position and start the backoff move.
+    // The backoff is a short downward move to release the endstop mechanism.
     if (_mode == ProfileMode::HOMING && isTop && !_homingBackoffActive) {
         _commandedVelocityMms = 0.0f;
         _stepper.stop(HARD);
-        _stepper.encoder.setHome();   // zero encoder at the top endstop
+        _stepper.encoder.setHome();   // set encoder origin at the top endstop
         _homingBackoffActive = true;
         startMoveToMm(-HOMING_BACKOFF_MM, HOMING_SPEED_MM_S);
         return;
     }
 
-    // Ignore spurious triggers when idle or already backing off.
+    // ---- Ignore benign triggers ----------------------------------------------
+    // NONE = motor idle, LIMIT_BACKOFF = already handling a prior trigger.
     if (_mode == ProfileMode::NONE || _mode == ProfileMode::LIMIT_BACKOFF) return;
 
-    // Unexpected endstop hit during motion — hard-stop and schedule a backoff.
+    // ---- Unexpected trigger during motion ------------------------------------
+    // Hard-stop immediately to prevent mechanical damage, then schedule a
+    // short backoff move away from the endstop.  The backoff is executed in
+    // updateLimitBackoff() on the next loop() iteration (not here in the ISR)
+    // because startMoveToMm() is not ISR-safe on all platforms.
     _stepper.stop(HARD);
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
     _paused               = false;
-    _limitTriggered       = true;
+    _limitTriggered       = true;     // flag for updateLimitBackoff() to process
     _limitIsTop           = isTop;
     _mode                 = ProfileMode::LIMIT_BACKOFF;
 }
@@ -298,12 +362,14 @@ void MotionController::onEndstopTriggered(bool isTop) {
 // Telemetry accessors
 // =============================================================================
 
-float MotionController::getPositionMm()           { return positionMm();          }
-float MotionController::getActualVelocityMms()    { return actualVelocityMms();   }
-float MotionController::getCommandedVelocityMms() const { return _commandedVelocityMms; }
-float MotionController::getActualAccelMms2()      const { return 0.0f;            }   // not yet implemented
+float MotionController::getPositionMm()                { return positionMm();          }
+float MotionController::getActualVelocityMms()         { return actualVelocityMms();   }
+float MotionController::getCommandedVelocityMms() const{ return _commandedVelocityMms; }
+float MotionController::getActualAccelMms2()      const{ return 0.0f;                  }  // not yet implemented
 
 bool MotionController::isStandstill() {
+    // getMotorState(STANDSTILL) returns 1 while the motor is actively stepping
+    // and 0 when it has stopped.  See isMoveComplete() for the full explanation.
     return _stepper.getMotorState(STANDSTILL);
 }
 
@@ -312,11 +378,19 @@ bool MotionController::isStandstill() {
 // =============================================================================
 
 void MotionController::startMoveToMm(float targetMm, float speedMms) {
-    if (!checkSoftLimit(targetMm)) return;     // estop + ERROR state set inside
+    // Reject the move if the target is outside the soft limits.
+    // checkSoftLimit() calls estop() and transitions to ERROR internally.
+    if (!checkSoftLimit(targetMm)) return;
+
+    // Record start position for the isMoveComplete() distance guard.
     _moveStartMm          = positionMm();
     _targetMm             = targetMm;
     _commandedVelocityMms = speedMms;
     TR2F("startMoveToMm pos=", _moveStartMm, " target=", targetMm);
+
+    // Apply speed/accel, then command an absolute angle move.
+    // moveToAngle() uses the encoder origin set by setHome() during homing,
+    // so _targetMm (converted to degrees) is an absolute shaft position.
     setSpeed(speedMms);
     _stepper.moveToAngle(mmToDeg(targetMm));
 }
@@ -335,10 +409,14 @@ bool MotionController::isDwellComplete() const {
 }
 
 bool MotionController::isMoveComplete() {
+    // Never complete during a dwell — dwell and move are mutually exclusive.
     if (_inDwell) return false;
 
-    // getMotorState(STANDSTILL) returns 1 while the motor is actively stepping
-    // and 0 when it has stopped.  So "complete" = not stepping any more.
+    // STANDSTILL semantics (confirmed empirically):
+    //   getMotorState(STANDSTILL) == 1  →  motor is actively stepping
+    //   getMotorState(STANDSTILL) == 0  →  motor has stopped
+    // This is inverted from the register name, but matches observed behaviour.
+    // Return false (not complete) while the motor is still stepping.
     if (_stepper.getMotorState(STANDSTILL)) return false;
 
     float pos      = positionMm();
@@ -346,11 +424,15 @@ bool MotionController::isMoveComplete() {
     float movedMm  = fabsf(pos        - _moveStartMm);
     float errorMm  = fabsf(pos        - _targetMm);
 
-    // Reject a spurious early stop before the motor has covered half the distance.
+    // Guard 1: Reject a spurious early STANDSTILL before the motor has covered
+    // half the commanded distance.  Brief glitches in the STANDSTILL flag can
+    // occur at the start of very slow moves before the ramp has fully built up.
     if (travelMm > 0.5f && movedMm < travelMm * 0.5f) return false;
 
-    // Reject if the motor stopped far from the target (e.g. unexpected limit hit).
-    if (travelMm > 0.5f && errorMm > 3.0f)             return false;
+    // Guard 2: Reject if the motor stopped far from the target.  This catches
+    // cases where an unexpected endstop trigger halted the motor early —
+    // without this guard the profile would advance to the next phase prematurely.
+    if (travelMm > 0.5f && errorMm > 3.0f) return false;
 
     TR2F("isMoveComplete pos=", pos, " target=", _targetMm);
     return true;
@@ -358,6 +440,7 @@ bool MotionController::isMoveComplete() {
 
 bool MotionController::checkSoftLimit(float targetMm) {
     if (targetMm < _softLimitMinMm || targetMm > _softLimitMaxMm) {
+        // Print a diagnostic message with the offending target and current limits.
         Serial.print("ERR SOFT_LIMIT_EXCEEDED target=");
         Serial.print(targetMm, 2);
         Serial.print("mm limits=[");
@@ -365,6 +448,8 @@ bool MotionController::checkSoftLimit(float targetMm) {
         Serial.print(", ");
         Serial.print(_softLimitMaxMm, 2);
         Serial.println("]");
+        // estop() hard-stops the motor; toError() overrides the ErrorCode with
+        // the specific fault so the caller can identify the cause.
         estop();
         _sm.toError(ErrorCode::SOFT_LIMIT_EXCEEDED);
         return false;
@@ -377,7 +462,15 @@ bool MotionController::checkSoftLimit(float targetMm) {
 // =============================================================================
 
 void MotionController::updateHoming() {
-    if (!_homingBackoffActive) return;   // waiting for the endstop ISR to fire
+    // Phase 1 (homingBackoffActive == false):
+    //   The motor is moving upward toward the top endstop via moveAngle().
+    //   We wait here — the ISR fires when the endstop is hit, zeroes the encoder,
+    //   and starts the backoff move, setting _homingBackoffActive = true.
+    if (!_homingBackoffActive) return;
+
+    // Phase 2 (homingBackoffActive == true):
+    //   The backoff move is in progress.  Wait for it to complete, then
+    //   declare the system homed and transition to READY.
     if (isMoveComplete()) {
         _mode                 = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;
@@ -392,14 +485,19 @@ void MotionController::updateHoming() {
 void MotionController::updateTrapezoidal() {
     RunPhase phase = _sm.getPhase();
 
+    // ---- Dwell in progress --------------------------------------------------
+    // Remain here until the dwell timer expires, then advance to the next phase.
     if (_inDwell) {
         if (!isDwellComplete()) return;
         _inDwell = false;
+
         if (phase == RunPhase::DWELL_BOTTOM) {
+            // Bottom dwell complete → start ascending back to profile start.
             TR("dwell_bottom done -> ASCENDING");
             _sm.setPhase(RunPhase::ASCENDING);
             startMoveToMm(_profileStartMm, _withdrawSpeedMms);
         } else if (phase == RunPhase::DWELL_TOP) {
+            // Top dwell complete → start the next descent.
             TR("dwell_top done -> DESCENDING");
             _sm.setPhase(RunPhase::DESCENDING);
             startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
@@ -407,20 +505,26 @@ void MotionController::updateTrapezoidal() {
         return;
     }
 
+    // ---- Move in progress ---------------------------------------------------
+    // Remain here until the motor reaches the target position.
     if (!isMoveComplete()) return;
 
+    // ---- Move complete — advance the phase ----------------------------------
     if (phase == RunPhase::DESCENDING) {
+        // Reached the bottom — begin dwell in solution.
         TR("DESCENDING done -> DWELL_BOTTOM");
         _sm.setPhase(RunPhase::DWELL_BOTTOM);
         startDwell(_dwellBottomMs);
 
     } else if (phase == RunPhase::ASCENDING) {
         if (_currentDip < _nDips) {
+            // More dips remain — dwell at the top before the next descent.
             _currentDip++;
             TR("ASCENDING done -> DWELL_TOP");
             _sm.setPhase(RunPhase::DWELL_TOP);
             startDwell(_dwellTopMs);
         } else {
+            // All dips complete — return to READY.
             TR("ASCENDING done -> profile complete");
             _mode                 = ProfileMode::NONE;
             _commandedVelocityMms = 0.0f;
@@ -437,16 +541,21 @@ void MotionController::updateTrapezoidal() {
 void MotionController::updateSegmented() {
     RunPhase phase = _sm.getPhase();
 
+    // ---- Dwell in progress --------------------------------------------------
     if (_inDwell) {
         if (!isDwellComplete()) return;
         _inDwell = false;
+
         if (phase == RunPhase::DWELL_BOTTOM) {
+            // Bottom dwell done — start executing the segments in reverse
+            // (ascending direction) back to the top.
             _sm.setPhase(RunPhase::ASCENDING);
             if (_segIndex < _segCount) {
                 float target = getPositionMm() + _segments[_segIndex].distMm;
                 startMoveToMm(target, _segments[_segIndex].speedMms);
             }
         } else if (phase == RunPhase::DWELL_TOP) {
+            // Top dwell done — restart segment sequence from index 0.
             _segIndex = 0;
             _sm.setPhase(RunPhase::DESCENDING);
             float target = getPositionMm() + _segments[0].distMm;
@@ -455,26 +564,35 @@ void MotionController::updateSegmented() {
         return;
     }
 
+    // ---- Move in progress ---------------------------------------------------
     if (!isMoveComplete()) return;
 
+    // ---- Segment complete — advance to the next segment --------------------
     _segIndex++;
     if (_segIndex < _segCount) {
+        // More segments remain in this sweep — command the next one.
         float target = getPositionMm() + _segments[_segIndex].distMm;
         startMoveToMm(target, _segments[_segIndex].speedMms);
         return;
     }
 
+    // ---- All segments in this sweep complete --------------------------------
+    // _segIndex has passed the end of the buffer; decide what happens next
+    // based on which direction we were travelling.
     if (phase == RunPhase::DESCENDING) {
+        // Finished the downward sweep — dwell at the bottom.
         _sm.setPhase(RunPhase::DWELL_BOTTOM);
         startDwell(_segDwellBottomMs);
-        _segIndex = 0;
+        _segIndex = 0;   // reset so the ascending sweep starts from segment 0
 
     } else if (phase == RunPhase::ASCENDING) {
         if (_segCurrentDip < _segNDips) {
+            // More full dip cycles remain — dwell at the top then repeat.
             _segCurrentDip++;
             _sm.setPhase(RunPhase::DWELL_TOP);
             startDwell(_segDwellTopMs);
         } else {
+            // All dip cycles done — return to READY.
             _mode                 = ProfileMode::NONE;
             _commandedVelocityMms = 0.0f;
             _sm.setPhase(RunPhase::NONE);
@@ -490,15 +608,19 @@ void MotionController::updateSegmented() {
 void MotionController::updateLimitBackoff() {
     uint32_t now = millis();
 
+    // ---- First pass: process the pending trigger flag -----------------------
+    // The ISR sets _limitTriggered and switches _mode to LIMIT_BACKOFF, but
+    // does not call startMoveToMm() because that function is not ISR-safe.
+    // On the first loop() call after the ISR, we pick up the flag here.
     if (_limitTriggered) {
         _limitTriggered = false;
         Serial.print(_limitIsTop ? "TOP" : "BOTTOM");
         Serial.println(" LIMIT switch triggered");
 
-        // Back off away from the triggered endstop.
-        // positionMm() = 0 at home (top), positive = up, negative = down.
-        //   Top triggered    → move down (subtract backoff distance)
-        //   Bottom triggered → move up   (add    backoff distance)
+        // Back off away from whichever endstop fired.
+        // Coordinate convention: home (top) = 0, positive = up, negative = down.
+        //   Top triggered    → current pos ≈ 0, move down (subtract backoff)
+        //   Bottom triggered → current pos is negative, move up (add backoff)
         float target = _limitIsTop
             ? positionMm() - LIMIT_BACKOFF_MM
             : positionMm() + LIMIT_BACKOFF_MM;
@@ -508,9 +630,16 @@ void MotionController::updateLimitBackoff() {
         return;
     }
 
+    // ---- Subsequent passes: wait for backoff to complete -------------------
     if (_limitBackoffActive) {
         uint32_t elapsed = now - _limitBackoffStart;
-        if (elapsed < 200) return;   // give the motor time to start moving
+
+        // Ignore isMoveComplete() for the first 200 ms — the STANDSTILL signal
+        // may briefly read "stopped" before the motor has started moving.
+        if (elapsed < 200) return;
+
+        // Once the backoff is done (or a 5 s safety timeout expires), return
+        // to READY so the user can issue a new command.
         if (isMoveComplete() || elapsed >= 5000) {
             _limitBackoffActive   = false;
             _mode                 = ProfileMode::NONE;
@@ -525,10 +654,13 @@ void MotionController::updateLimitBackoff() {
 // =============================================================================
 
 void MotionController::updateMove() {
-    // Diagnostics manages its own completion via isStandstill().
-    // This handler only fires for CMD MOVE (state == RUNNING).
+    // Skip if the state machine is not RUNNING.  This prevents Diagnostics
+    // from accidentally completing a CMD MOVE that was never started — the
+    // Diagnostics module monitors its own completion via isStandstill().
     if (_sm.getState() != SystemState::RUNNING) return;
 
+    // When the motor reaches the target, release the RUNNING state and print
+    // a confirmation so the Python UI knows the move is done.
     if (isMoveComplete()) {
         _mode                 = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;

@@ -4,12 +4,18 @@
 // Number parsing helpers — avoid sscanf (unreliable on STM32)
 // =============================================================================
 
-/** @brief Advance past spaces in *p, then parse and return a float. */
+/**
+ * @brief Advance past spaces in *p, then parse and return a float.
+ *
+ * Uses strtof() which advances the pointer to the first character after the
+ * number, making it safe to call repeatedly on the same argument string to
+ * extract consecutive values without manual pointer arithmetic.
+ */
 static float nextFloat(char*& p) {
-    while (*p == ' ') p++;
+    while (*p == ' ') p++;     // skip leading whitespace
     char* end;
     float v = strtof(p, &end);
-    p = end;
+    p = end;                   // advance past the parsed token
     return v;
 }
 
@@ -52,14 +58,24 @@ void CommandParser::setTelemetry(Telemetry* telem) {
 // =============================================================================
 
 void CommandParser::update() {
+    // Accumulate characters into _buf until a newline is received.
+    // The buffer is null-terminated and dispatched as a complete line.
     while (Serial.available()) {
         char c = (char)Serial.read();
+
         if (c == '\n') {
+            // End of line — null-terminate and strip trailing CR if present
+            // (handles both \n and \r\n line endings from different terminals).
             _buf[_len] = '\0';
             if (_len > 0 && _buf[_len - 1] == '\r') _buf[--_len] = '\0';
+
+            // Dispatch non-empty lines; ignore blank lines.
             if (_len > 0) dispatch(_buf);
             _len = 0;
+
         } else if (_len < (uint8_t)(sizeof(_buf) - 1)) {
+            // Normal character — append to buffer.
+            // Characters beyond buffer size are silently dropped to prevent overflow.
             _buf[_len++] = c;
         }
     }
@@ -70,11 +86,14 @@ void CommandParser::update() {
 // =============================================================================
 
 void CommandParser::ack(const char* cmd) {
+    // Every successful CMD command produces exactly one ACK response.
     Serial.print("ACK ");
     Serial.println(cmd);
 }
 
 void CommandParser::err(const char* cmd, const char* reason) {
+    // Every rejected CMD command produces exactly one ERR response.
+    // The format is: ERR <command> <reason_code>
     Serial.print("ERR ");
     Serial.print(cmd);
     Serial.print(" ");
@@ -86,11 +105,12 @@ void CommandParser::err(const char* cmd, const char* reason) {
 // =============================================================================
 
 void CommandParser::dispatch(char* line) {
-    // Strip trailing whitespace
+    // Strip trailing whitespace (spaces or stray CR characters).
     int len = (int)strlen(line);
     while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\r'))
         line[--len] = '\0';
 
+    // Route to the appropriate namespace handler.
     if (strcmp(line, "HELP") == 0 || strcmp(line, "DIAG CMD") == 0) {
         printHelp();
         return;
@@ -98,6 +118,7 @@ void CommandParser::dispatch(char* line) {
     if (strncmp(line, "DIAG", 4) == 0) { dispatchDiag(line);      return; }
     if (strncmp(line, "CMD ",  4) == 0) { dispatchCmd(line + 4);   return; }
 
+    // Unknown prefix — report and discard.
     Serial.print("ERR unknown_command: ");
     Serial.println(line);
 }
@@ -107,7 +128,10 @@ void CommandParser::dispatch(char* line) {
 // =============================================================================
 
 void CommandParser::dispatchCmd(char* args) {
-    // While collecting segments only MOVE_SEG and ESTOP are accepted
+    // ---- Segment collection mode guard -------------------------------------
+    // After CMD BEGIN_SEGMENTED_MOVE the parser enters a collection mode
+    // where only MOVE_SEG and ESTOP are valid.  Any other command aborts
+    // the collection and reports an error.
     if (_collectingSegs) {
         if (strncmp(args, "MOVE_SEG ", 9) == 0) { cmdMoveSeg(args + 9); return; }
         if (strcmp(args,  "ESTOP")     == 0)     { cmdEstop();           return; }
@@ -116,7 +140,7 @@ void CommandParser::dispatchCmd(char* args) {
         return;
     }
 
-    // Zero-argument commands
+    // ---- Zero-argument commands ---------------------------------------------
     if (strcmp(args, "HOME")           == 0) { cmdHome();          return; }
     if (strcmp(args, "GET_STATE")      == 0) { cmdGetState();      return; }
     if (strcmp(args, "STOP")           == 0) { cmdStop();          return; }
@@ -125,7 +149,9 @@ void CommandParser::dispatchCmd(char* args) {
     if (strcmp(args, "RESUME")         == 0) { cmdResume();        return; }
     if (strcmp(args, "RUN_LOADED_MOVE")== 0) { cmdRunLoadedMove(); return; }
 
-    // Commands with arguments
+    // ---- Commands with arguments --------------------------------------------
+    // strncmp matches the keyword prefix; the handler receives the pointer
+    // past the keyword+space so it can parse arguments with nextFloat/nextLong.
     if (strncmp(args, "MOVE ",                 5)  == 0) { cmdMove(args + 5);                return; }
     if (strncmp(args, "JOG ",                  4)  == 0) { cmdJog(args + 4);                 return; }
     if (strncmp(args, "RUN_PROFILE ",         12)  == 0) { cmdRunProfile(args + 12);         return; }
@@ -142,6 +168,8 @@ void CommandParser::dispatchCmd(char* args) {
 // =============================================================================
 
 void CommandParser::cmdHome() {
+    // HOME is accepted from IDLE (never homed), READY (re-home), or ERROR
+    // (recovery).  It is not accepted while RUNNING or PAUSED.
     SystemState s = _sm.getState();
     if (s != SystemState::IDLE && s != SystemState::READY && s != SystemState::ERROR) {
         err("HOME", "invalid_state");
@@ -153,6 +181,8 @@ void CommandParser::cmdHome() {
 }
 
 void CommandParser::cmdGetState() {
+    // Returns the current state and phase on a single line so the Python UI
+    // can parse it with a split.  Format: "STATE <state> <phase>"
     Serial.print("STATE ");
     Serial.print(_sm.stateString());
     Serial.print(" ");
@@ -160,6 +190,8 @@ void CommandParser::cmdGetState() {
 }
 
 void CommandParser::cmdStop() {
+    // STOP is a graceful (soft) stop.  It is valid while RUNNING, PAUSED, or
+    // READY (to stop a jog).  ESTOP is available from any state.
     SystemState s = _sm.getState();
     if (s != SystemState::RUNNING && s != SystemState::PAUSED && s != SystemState::READY) {
         err("STOP", "invalid_state");
@@ -170,6 +202,8 @@ void CommandParser::cmdStop() {
 }
 
 void CommandParser::cmdEstop() {
+    // Emergency stop — always accepted, no state check.
+    // Also cancels any in-progress segment collection.
     _collectingSegs = false;
     _mc.estop();
     ack("ESTOP");
@@ -202,9 +236,14 @@ void CommandParser::cmdMove(char* p) {
     float speed = nextFloat(p);
     float accel = nextFloat(p);
 
+    // Speed and accel default to the profile defaults if not supplied (or if
+    // the supplied value is 0 / negative).
     if (speed <= 0.0f) speed = DEFAULT_DIP_SPEED_MM_S;
     if (accel <= 0.0f) accel = DEFAULT_ACCEL_MM_S2;
 
+    // Transition to RUNNING before issuing the move so that updateMove()
+    // in MotionController correctly identifies this as a CMD MOVE (not a
+    // Diagnostics move).
     _sm.toRunning();
     _mc.moveByMm(dist, speed, accel);
     ack("MOVE");
@@ -215,7 +254,7 @@ void CommandParser::cmdJog(char* p) {
         err("JOG", "invalid_state");
         return;
     }
-    // p = "UP <speed>" or "DOWN <speed>"
+    // Parse the direction keyword ("UP" or "DOWN") before the speed value.
     bool up;
     if      (strncmp(p, "UP ",   3) == 0) { up = true;  p += 3; }
     else if (strncmp(p, "DOWN ", 5) == 0) { up = false; p += 5; }
@@ -233,6 +272,7 @@ void CommandParser::cmdRunProfile(char* p) {
         err("RUN_PROFILE", "invalid_state");
         return;
     }
+    // Parse all 7 profile parameters in order.
     float dipSpd   = nextFloat(p);
     float wdrawSpd = nextFloat(p);
     float accel    = nextFloat(p);
@@ -241,6 +281,9 @@ void CommandParser::cmdRunProfile(char* p) {
     long  dwellTop = nextLong(p);
     long  nDips    = nextLong(p);
 
+    // Validate: all physical parameters must be positive.
+    // An invalid profile transitions directly to ERROR to prevent a silent
+    // bad-parameter run.
     if (dipSpd <= 0 || wdrawSpd <= 0 || accel <= 0 || depth <= 0 || nDips <= 0) {
         err("RUN_PROFILE", "invalid_params");
         _sm.toError(ErrorCode::PROFILE_INVALID);
@@ -261,11 +304,14 @@ void CommandParser::cmdBeginSegmentedMove(char* p) {
     long dwellBot = nextLong(p);
     long dwellTop = nextLong(p);
 
+    // nSegs must fit in the segment buffer; nDips must be at least 1.
     if (nSegs <= 0 || nSegs > MOVE_SEG_BUFFER_SIZE || nDips <= 0) {
         err("BEGIN_SEGMENTED_MOVE", "invalid_params");
         _sm.toError(ErrorCode::PROFILE_INVALID);
         return;
     }
+    // Initialise the segment buffer in MotionController and enter collection mode.
+    // The parser will now only accept MOVE_SEG until all nSegs segments arrive.
     _mc.beginSegmentedMove((uint8_t)nDips, (uint16_t)dwellBot, (uint16_t)dwellTop);
     _collectingSegs = true;
     _segTotal       = (uint8_t)nSegs;
@@ -286,6 +332,7 @@ void CommandParser::cmdMoveSeg(char* p) {
         _collectingSegs = false;
         return;
     }
+    // addSegment() returns false if the buffer is full.
     if (!_mc.addSegment(dist, speed)) {
         err("MOVE_SEG", "seg_buffer_overflow");
         _collectingSegs = false;
@@ -293,6 +340,9 @@ void CommandParser::cmdMoveSeg(char* p) {
         return;
     }
     _segReceived++;
+
+    // When all expected segments have arrived, exit collection mode and
+    // send ACK PROFILE_READY to tell the Python UI to issue RUN_LOADED_MOVE.
     if (_segReceived >= _segTotal) {
         _collectingSegs = false;
         ack("PROFILE_READY");
@@ -304,6 +354,7 @@ void CommandParser::cmdRunLoadedMove() {
         err("RUN_LOADED_MOVE", "invalid_state");
         return;
     }
+    // Guard against running if segment collection was started but never completed.
     if (_collectingSegs) {
         err("RUN_LOADED_MOVE", "segment_collection_incomplete");
         return;
@@ -324,6 +375,8 @@ void CommandParser::cmdSetTelemRate(char* p) {
 }
 
 void CommandParser::cmdSetSoftLimits(char* p) {
+    // Allow changing limits while IDLE or READY.
+    // Not permitted while RUNNING / PAUSED to avoid mid-move limit changes.
     SystemState s = _sm.getState();
     if (s != SystemState::READY && s != SystemState::IDLE) {
         err("SET_SOFT_LIMITS", "invalid_state");
@@ -332,6 +385,7 @@ void CommandParser::cmdSetSoftLimits(char* p) {
     float minMm = nextFloat(p);
     float maxMm = nextFloat(p);
 
+    // Sanity check: min must be strictly less than max.
     if (minMm >= maxMm) {
         err("SET_SOFT_LIMITS", "min_must_be_less_than_max");
         return;
@@ -345,6 +399,7 @@ void CommandParser::cmdSetSoftLimits(char* p) {
 // =============================================================================
 
 void CommandParser::dispatchDiag(char* line) {
+    // Exact-match commands (no arguments)
     if      (strcmp(line, "DIAG MOTOR")       == 0) { _diag.startMotorTest();        return; }
     else if (strcmp(line, "DIAG MOTORENCODER")== 0) { _diag.startMotorEncoderTest(); return; }
     else if (strcmp(line, "DIAG ENDSTOP")     == 0) { _diag.startEndstopTest();      return; }
@@ -352,9 +407,11 @@ void CommandParser::dispatchDiag(char* line) {
     else if (strcmp(line, "DIAG POS")         == 0) { _diag.printPosition();         return; }
     else if (strcmp(line, "DIAG JOG STOP")    == 0) { _diag.exit();                  return; }
 
+    // Commands with an optional speed argument
     else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
         char* p   = line + 13;
         float spd = nextFloat(p);
+        // Default to 5 mm/s if no speed was supplied.
         _diag.startJog(false, spd > 0.0f ? spd : 5.0f);
 
     } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
@@ -363,6 +420,8 @@ void CommandParser::dispatchDiag(char* line) {
         _diag.startJog(true, spd > 0.0f ? spd : 5.0f);
 
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
+        // Parse up to three optional arguments: distance, speed, accel.
+        // Fall back to the DIAG defaults if any argument is absent or zero.
         char* p     = line + 9;
         float mm    = nextFloat(p);
         float speed = nextFloat(p);
@@ -372,6 +431,8 @@ void CommandParser::dispatchDiag(char* line) {
                             accel >  0.0f ? accel : Diagnostics::DIAG_ACCEL_MMS2);
 
     } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
+        // DIAG CAL RESULT must be checked before DIAG CAL because the shorter
+        // prefix "DIAG CAL" would match both — order matters here.
         char* p  = line + 15;
         float mm = nextFloat(p);
         _diag.computeCalResult(mm);
@@ -379,6 +440,7 @@ void CommandParser::dispatchDiag(char* line) {
     } else if (strncmp(line, "DIAG CAL", 8) == 0) {
         char* p  = line + 8;
         float mm = nextFloat(p);
+        // Default to 50 mm if no distance was given.
         _diag.startCalMove(mm != 0.0f ? mm : 50.0f);
 
     } else {
