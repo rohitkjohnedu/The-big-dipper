@@ -89,20 +89,26 @@ public:
                     int   dwellBottomMs, int dwellTopMs, int nDips);
 
     /**
-     * @brief Begin loading a segmented move.  Follow with addSegment() calls.
-     * @param nDips         Number of times to repeat the full segment sequence.
-     * @param dwellBottomMs Dwell time at the bottom of each cycle (ms).
-     * @param dwellTopMs    Dwell time at the top between cycles (ms).
+     * @brief Reset the segment buffer ready for addSegment() calls.
+     *        Must be called before loading a new segment sequence.
      */
-    void beginSegmentedMove(uint8_t nDips, uint16_t dwellBottomMs, uint16_t dwellTopMs);
+    void beginSegmentedMove();
 
     /**
-     * @brief Append one segment to the loaded move buffer.
-     * @param distMm   Signed displacement for this segment (mm, +ve = up).
-     * @param speedMms Speed for this segment (mm/s).
+     * @brief Append a motion segment to the loaded move buffer.
+     * @param distMm    Signed displacement (mm, +ve = up).
+     * @param speedMms  Speed (mm/s).
+     * @param accelMms2 Acceleration (mm/s²).
      * @return true on success, false if the buffer is full.
      */
-    bool addSegment(float distMm, float speedMms);
+    bool addSegment(float distMm, float speedMms, float accelMms2);
+
+    /**
+     * @brief Append a dwell (hold-position) segment to the loaded move buffer.
+     * @param dwellMs  Time to hold position (ms).
+     * @return true on success, false if the buffer is full.
+     */
+    bool addDwellSegment(uint32_t dwellMs);
 
     /** @brief Execute the previously loaded segment sequence. */
     void runLoadedMove();
@@ -170,8 +176,12 @@ private:
 
     /** @brief One segment in a loaded segmented move. */
     struct Segment {
-        float distMm;    ///< Signed displacement (mm), same convention as moveByMm (+ve = up)
-        float speedMms;  ///< Speed for this segment (mm/s)
+        enum class Type : uint8_t { MOVE, DWELL };
+        Type     type;     ///< Segment type — MOVE executes a displacement, DWELL holds position
+        float    distMm;   ///< (MOVE only) Signed displacement (mm, +ve = up)
+        float    speedMms; ///< (MOVE only) Speed (mm/s)
+        float    accelMms2;///< (MOVE only) Acceleration (mm/s²)
+        uint32_t dwellMs;  ///< (DWELL only) Hold time (ms)
     };
 
     /** @brief Snapshot saved by pause() and consumed by resume(). */
@@ -180,7 +190,6 @@ private:
         RunPhase    phase;
         int         currentDip;
         uint8_t     segIndex;
-        int         segDip;
     };
 
     // -------------------------------------------------------------------------
@@ -209,10 +218,6 @@ private:
     Segment  _segments[MOVE_SEG_BUFFER_SIZE];
     uint8_t  _segCount;
     uint8_t  _segIndex;
-    uint8_t  _segNDips;
-    uint16_t _segDwellBottomMs;
-    uint16_t _segDwellTopMs;
-    int      _segCurrentDip;
 
     // Move tracking
     float _targetMm;         ///< Absolute target for the current move (mm)
@@ -289,4 +294,12 @@ private:
     void updateSegmented();
     void updateLimitBackoff();
     void updateMove();
+
+    /**
+     * @brief Start executing _segments[_segIndex].
+     *        Dispatches to startMoveToMm() for MOVE segments and startDwell()
+     *        for DWELL segments.  Called by runLoadedMove(), updateSegmented(),
+     *        and resume().
+     */
+    void startCurrentSegment();
 };

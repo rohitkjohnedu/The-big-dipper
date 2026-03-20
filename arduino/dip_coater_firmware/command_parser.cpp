@@ -133,10 +133,11 @@ void CommandParser::dispatchCmd(char* args) {
     // where only MOVE_SEG and ESTOP are valid.  Any other command aborts
     // the collection and reports an error.
     if (_collectingSegs) {
-        if (strncmp(args, "MOVE_SEG ", 9) == 0) { cmdMoveSeg(args + 9); return; }
-        if (strcmp(args,  "ESTOP")     == 0)     { cmdEstop();           return; }
+        if (strncmp(args, "MOVE_SEG ",  9) == 0) { cmdMoveSeg(args + 9);  return; }
+        if (strncmp(args, "DWELL_SEG ", 10)== 0) { cmdDwellSeg(args + 10);return; }
+        if (strcmp(args,  "ESTOP")      == 0)    { cmdEstop();             return; }
         _collectingSegs = false;
-        err("CMD", "segment_collection_aborted — only MOVE_SEG or ESTOP accepted");
+        err("CMD", "segment_collection_aborted — only MOVE_SEG, DWELL_SEG or ESTOP accepted");
         return;
     }
 
@@ -157,6 +158,7 @@ void CommandParser::dispatchCmd(char* args) {
     if (strncmp(args, "RUN_PROFILE ",         12)  == 0) { cmdRunProfile(args + 12);         return; }
     if (strncmp(args, "BEGIN_SEGMENTED_MOVE ", 21) == 0) { cmdBeginSegmentedMove(args + 21); return; }
     if (strncmp(args, "MOVE_SEG ",             9)  == 0) { cmdMoveSeg(args + 9);             return; }
+    if (strncmp(args, "DWELL_SEG ",           10)  == 0) { cmdDwellSeg(args + 10);           return; }
     if (strncmp(args, "SET_TELEM_RATE ",       15) == 0) { cmdSetTelemRate(args + 15);       return; }
     if (strncmp(args, "SET_SOFT_LIMITS ",      16) == 0) { cmdSetSoftLimits(args + 16);      return; }
 
@@ -299,20 +301,17 @@ void CommandParser::cmdBeginSegmentedMove(char* p) {
         err("BEGIN_SEGMENTED_MOVE", "invalid_state");
         return;
     }
-    long nSegs    = nextLong(p);
-    long nDips    = nextLong(p);
-    long dwellBot = nextLong(p);
-    long dwellTop = nextLong(p);
+    long nSegs = nextLong(p);
 
-    // nSegs must fit in the segment buffer; nDips must be at least 1.
-    if (nSegs <= 0 || nSegs > MOVE_SEG_BUFFER_SIZE || nDips <= 0) {
+    // nSegs must be at least 1 and must fit in the segment buffer.
+    if (nSegs <= 0 || nSegs > MOVE_SEG_BUFFER_SIZE) {
         err("BEGIN_SEGMENTED_MOVE", "invalid_params");
         _sm.toError(ErrorCode::PROFILE_INVALID);
         return;
     }
-    // Initialise the segment buffer in MotionController and enter collection mode.
+    // Clear the segment buffer in MotionController and enter collection mode.
     // The parser will now only accept MOVE_SEG until all nSegs segments arrive.
-    _mc.beginSegmentedMove((uint8_t)nDips, (uint16_t)dwellBot, (uint16_t)dwellTop);
+    _mc.beginSegmentedMove();
     _collectingSegs = true;
     _segTotal       = (uint8_t)nSegs;
     _segReceived    = 0;
@@ -326,14 +325,17 @@ void CommandParser::cmdMoveSeg(char* p) {
     }
     float dist  = nextFloat(p);
     float speed = nextFloat(p);
+    float accel = nextFloat(p);
 
     if (speed <= 0.0f) {
         err("MOVE_SEG", "bad_speed");
         _collectingSegs = false;
         return;
     }
+    if (accel <= 0.0f) accel = DEFAULT_ACCEL_MM_S2;
+
     // addSegment() returns false if the buffer is full.
-    if (!_mc.addSegment(dist, speed)) {
+    if (!_mc.addSegment(dist, speed, accel)) {
         err("MOVE_SEG", "seg_buffer_overflow");
         _collectingSegs = false;
         _sm.toError(ErrorCode::SEG_BUFFER_OVERFLOW);
@@ -343,6 +345,30 @@ void CommandParser::cmdMoveSeg(char* p) {
 
     // When all expected segments have arrived, exit collection mode and
     // send ACK PROFILE_READY to tell the Python UI to issue RUN_LOADED_MOVE.
+    if (_segReceived >= _segTotal) {
+        _collectingSegs = false;
+        ack("PROFILE_READY");
+    }
+}
+
+void CommandParser::cmdDwellSeg(char* p) {
+    if (!_collectingSegs) {
+        err("DWELL_SEG", "not_in_segment_collection");
+        return;
+    }
+    long ms = nextLong(p);
+    if (ms <= 0) {
+        err("DWELL_SEG", "bad_dwell_ms");
+        _collectingSegs = false;
+        return;
+    }
+    if (!_mc.addDwellSegment((uint32_t)ms)) {
+        err("DWELL_SEG", "seg_buffer_overflow");
+        _collectingSegs = false;
+        _sm.toError(ErrorCode::SEG_BUFFER_OVERFLOW);
+        return;
+    }
+    _segReceived++;
     if (_segReceived >= _segTotal) {
         _collectingSegs = false;
         ack("PROFILE_READY");
@@ -464,8 +490,9 @@ void CommandParser::printHelp() {
     Serial.println("  CMD MOVE <dist_mm> [speed_mm_s] [accel_mm_s2]");
     Serial.println("  CMD JOG <UP|DOWN> <speed_mm_s>");
     Serial.println("  CMD RUN_PROFILE <dip_spd> <wdraw_spd> <accel> <depth_mm> <dwell_bot_ms> <dwell_top_ms> <n_dips>");
-    Serial.println("  CMD BEGIN_SEGMENTED_MOVE <n_segs> <n_dips> <dwell_bot_ms> <dwell_top_ms>");
-    Serial.println("  CMD MOVE_SEG <dist_mm> <speed_mm_s>   (repeat n_segs times)");
+    Serial.println("  CMD BEGIN_SEGMENTED_MOVE <n_segs>");
+    Serial.println("  CMD MOVE_SEG  <dist_mm> <speed_mm_s> [accel_mm_s2]  (counts toward n_segs)");
+    Serial.println("  CMD DWELL_SEG <dwell_ms>                             (counts toward n_segs)");
     Serial.println("  CMD RUN_LOADED_MOVE");
     Serial.println("  CMD SET_TELEM_RATE <hz>               (0=off, max 50)");
     Serial.println("  CMD SET_SOFT_LIMITS <min_mm> <max_mm>");

@@ -59,10 +59,6 @@ MotionController::MotionController(StateMachine& sm)
     , _currentDip         (1)
     , _segCount           (0)
     , _segIndex           (0)
-    , _segNDips           (1)
-    , _segDwellBottomMs   (0)
-    , _segDwellTopMs      (0)
-    , _segCurrentDip      (1)
     , _targetMm           (0.0f)
     , _moveStartMm        (0.0f)
     , _profileStartMm     (0.0f)
@@ -175,7 +171,6 @@ void MotionController::pause() {
     _pauseSnapshot.phase      = _sm.getPhase();
     _pauseSnapshot.currentDip = _currentDip;
     _pauseSnapshot.segIndex   = _segIndex;
-    _pauseSnapshot.segDip     = _segCurrentDip;
 
     // Clear the active mode so update() stops running the profile,
     // then soft-stop the motor and enter PAUSED state.
@@ -208,19 +203,13 @@ void MotionController::resume() {
         else if (ph == RunPhase::DWELL_TOP)    startDwell(_dwellTopMs);
 
     } else if (_mode == ProfileMode::SEGMENTED) {
-        // Restore segment index and dip counter, then restart the current
-        // segment from the motor's present position (not the original target).
-        _segIndex      = _pauseSnapshot.segIndex;
-        _segCurrentDip = _pauseSnapshot.segDip;
-        RunPhase ph    = _pauseSnapshot.phase;
-        if (ph == RunPhase::DESCENDING || ph == RunPhase::ASCENDING) {
-            if (_segIndex < _segCount) {
-                // Use current position as the new start for this segment.
-                float target = getPositionMm() + _segments[_segIndex].distMm;
-                startMoveToMm(target, _segments[_segIndex].speedMms);
-            }
-        } else if (ph == RunPhase::DWELL_BOTTOM) startDwell(_segDwellBottomMs);
-        else if   (ph == RunPhase::DWELL_TOP)    startDwell(_segDwellTopMs);
+        // Restore the segment index, then restart the current segment.
+        // For MOVE segments the motor re-commands from the current position.
+        // For DWELL segments the dwell timer restarts from zero.
+        _segIndex = _pauseSnapshot.segIndex;
+        if (_segIndex < _segCount) {
+            startCurrentSegment();
+        }
 
     } else if (_mode == ProfileMode::MOVING) {
         // Resume a paused CMD MOVE: re-command to the original absolute target.
@@ -286,26 +275,32 @@ void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
     startMoveToMm(_profileStartMm - _depthMm, _dipSpeedMms);
 }
 
-void MotionController::beginSegmentedMove(uint8_t nDips,
-                                           uint16_t dwellBottomMs,
-                                           uint16_t dwellTopMs) {
-    // Reset the segment buffer and store the repeat / dwell parameters.
-    // Segments are appended by subsequent addSegment() calls; the move does
-    // not start until runLoadedMove() is called.
-    _segNDips         = nDips;
-    _segDwellBottomMs = dwellBottomMs;
-    _segDwellTopMs    = dwellTopMs;
-    _segCount         = 0;
-    _segIndex         = 0;
-    _segCurrentDip    = 1;
+void MotionController::beginSegmentedMove() {
+    // Clear the segment buffer so addSegment() starts filling from the beginning.
+    // The move does not start until runLoadedMove() is called.
+    _segCount = 0;
+    _segIndex = 0;
 }
 
-bool MotionController::addSegment(float distMm, float speedMms) {
-    // Reject the segment if the buffer is already full.
+bool MotionController::addSegment(float distMm, float speedMms, float accelMms2) {
     if (_segCount >= MOVE_SEG_BUFFER_SIZE) return false;
-    
+    _segments[_segCount].type     = Segment::Type::MOVE;
     _segments[_segCount].distMm   = distMm;
     _segments[_segCount].speedMms = speedMms;
+    _segments[_segCount].accelMms2 = accelMms2;
+    _segments[_segCount].dwellMs  = 0;
+    _segCount++;
+    return true;
+}
+
+bool MotionController::addDwellSegment(uint32_t dwellMs) {
+    if (_segCount >= MOVE_SEG_BUFFER_SIZE) return false;
+    _segments[_segCount].type    = Segment::Type::DWELL;
+    _segments[_segCount].dwellMs = dwellMs;
+    // Motion fields unused for DWELL segments
+    _segments[_segCount].distMm   = 0.0f;
+    _segments[_segCount].speedMms = 0.0f;
+    _segments[_segCount].accelMms2 = 0.0f;
     _segCount++;
     return true;
 }
@@ -313,14 +308,11 @@ bool MotionController::addSegment(float distMm, float speedMms) {
 void MotionController::runLoadedMove() {
     if (_segCount == 0) return;   // nothing to run
 
-    // Reset execution pointers and immediately start the first segment.
-    _segIndex      = 0;
-    _segCurrentDip = 1;
-    _mode          = ProfileMode::SEGMENTED;
+    _segIndex = 0;
+    _mode     = ProfileMode::SEGMENTED;
     _sm.toRunning();
-    _sm.setPhase(RunPhase::DESCENDING);
-    float target = getPositionMm() + _segments[0].distMm;
-    startMoveToMm(target, _segments[0].speedMms);
+    _sm.setPhase(RunPhase::NONE);
+    startCurrentSegment();   // dispatches to move or dwell based on segment type
 }
 
 // =============================================================================
@@ -537,68 +529,66 @@ void MotionController::updateTrapezoidal() {
 // =============================================================================
 // updateSegmented
 // =============================================================================
+//
+// Executes a pre-loaded sequence of segments (distance + speed + accel) one
+// after another.  There is no dip-cycle structure — segments are simply run
+// in order and the move ends when the last segment completes.
+//
+// =============================================================================
+
+// =============================================================================
+// startCurrentSegment  — private helper
+// =============================================================================
+
+void MotionController::startCurrentSegment() {
+    const Segment& seg = _segments[_segIndex];
+    if (seg.type == Segment::Type::DWELL) {
+        // Hold-position segment — no motion, just start the dwell timer.
+        startDwell(seg.dwellMs);
+    } else {
+        // Motion segment — apply this segment's own accel then command the move.
+        _accelMms2   = seg.accelMms2;
+        float target = getPositionMm() + seg.distMm;
+        startMoveToMm(target, seg.speedMms);
+    }
+}
+
+// =============================================================================
+// updateSegmented
+// =============================================================================
+//
+// Executes a pre-loaded sequence of MOVE and DWELL segments in order.
+// Each segment completes independently (move reaches target, or dwell timer
+// expires) before the next one begins.
+//
+// =============================================================================
 
 void MotionController::updateSegmented() {
-    RunPhase phase = _sm.getPhase();
+    const Segment& seg = _segments[_segIndex];
 
-    // ---- Dwell in progress --------------------------------------------------
-    if (_inDwell) {
+    // ---- Check for completion of the current segment ------------------------
+    if (seg.type == Segment::Type::DWELL) {
+        // Waiting for the dwell timer set by startCurrentSegment().
         if (!isDwellComplete()) return;
         _inDwell = false;
-
-        if (phase == RunPhase::DWELL_BOTTOM) {
-            // Bottom dwell done — start executing the segments in reverse
-            // (ascending direction) back to the top.
-            _sm.setPhase(RunPhase::ASCENDING);
-            if (_segIndex < _segCount) {
-                float target = getPositionMm() + _segments[_segIndex].distMm;
-                startMoveToMm(target, _segments[_segIndex].speedMms);
-            }
-        } else if (phase == RunPhase::DWELL_TOP) {
-            // Top dwell done — restart segment sequence from index 0.
-            _segIndex = 0;
-            _sm.setPhase(RunPhase::DESCENDING);
-            float target = getPositionMm() + _segments[0].distMm;
-            startMoveToMm(target, _segments[0].speedMms);
-        }
-        return;
+    } else {
+        // Waiting for the motor to reach the move target.
+        if (!isMoveComplete()) return;
     }
 
-    // ---- Move in progress ---------------------------------------------------
-    if (!isMoveComplete()) return;
-
-    // ---- Segment complete — advance to the next segment --------------------
+    // ---- Current segment complete — advance to the next one -----------------
     _segIndex++;
     if (_segIndex < _segCount) {
-        // More segments remain in this sweep — command the next one.
-        float target = getPositionMm() + _segments[_segIndex].distMm;
-        startMoveToMm(target, _segments[_segIndex].speedMms);
+        startCurrentSegment();
         return;
     }
 
-    // ---- All segments in this sweep complete --------------------------------
-    // _segIndex has passed the end of the buffer; decide what happens next
-    // based on which direction we were travelling.
-    if (phase == RunPhase::DESCENDING) {
-        // Finished the downward sweep — dwell at the bottom.
-        _sm.setPhase(RunPhase::DWELL_BOTTOM);
-        startDwell(_segDwellBottomMs);
-        _segIndex = 0;   // reset so the ascending sweep starts from segment 0
-
-    } else if (phase == RunPhase::ASCENDING) {
-        if (_segCurrentDip < _segNDips) {
-            // More full dip cycles remain — dwell at the top then repeat.
-            _segCurrentDip++;
-            _sm.setPhase(RunPhase::DWELL_TOP);
-            startDwell(_segDwellTopMs);
-        } else {
-            // All dip cycles done — return to READY.
-            _mode                 = ProfileMode::NONE;
-            _commandedVelocityMms = 0.0f;
-            _sm.setPhase(RunPhase::NONE);
-            _sm.toReady();
-        }
-    }
+    // ---- All segments complete — return to READY ----------------------------
+    _mode                 = ProfileMode::NONE;
+    _commandedVelocityMms = 0.0f;
+    _sm.setPhase(RunPhase::NONE);
+    _sm.toReady();
+    Serial.println("CMD:SEGMENTED:DONE");
 }
 
 // =============================================================================

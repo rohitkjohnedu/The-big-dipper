@@ -33,9 +33,9 @@ STATE <state> <phase>        — response to CMD GET_STATE
 ```mermaid
 flowchart TD
     A([Serial.available]) --> B{char == newline?}
-    B -- No --> C[append to _buf\nif not full]
+    B -- No --> C["append to _buf<br/>if not full"]
     C --> A
-    B -- Yes --> D[null-terminate\nstrip trailing CR]
+    B -- Yes --> D["null-terminate<br/>strip trailing CR"]
     D --> E{buf empty?}
     E -- Yes --> A
     E -- No --> F[dispatch line]
@@ -92,6 +92,37 @@ Start continuous velocity motion.  Stop with `CMD STOP`.
 
 All parameters must be positive; any zero/negative value returns `ERR RUN_PROFILE invalid_params`.
 
+#### `CMD BEGIN_SEGMENTED_MOVE <n_segs>`
+
+Enter segment-collection mode.  `n_segs` is the total number of segments
+(MOVE_SEG + DWELL_SEG combined) that will follow.
+
+#### `CMD MOVE_SEG <dist_mm> <speed_mm_s> [accel_mm_s2]`
+
+Append a motion segment to the loaded buffer.  Only valid while in
+segment-collection mode (after `BEGIN_SEGMENTED_MOVE`).
+
+| Parameter | Unit | Description |
+|---|---|---|
+| `dist_mm` | mm | Signed displacement (+ve = up, -ve = down) |
+| `speed_mm_s` | mm/s | Travel speed |
+| `accel_mm_s2` | mm/s² | Acceleration (defaults to `DEFAULT_ACCEL_MM_S2` if 0) |
+
+Counts as one segment toward `n_segs`.
+
+#### `CMD DWELL_SEG <dwell_ms>`
+
+Append a hold-position (dwell) segment to the loaded buffer.  Only valid
+while in segment-collection mode.
+
+| Parameter | Unit | Description |
+|---|---|---|
+| `dwell_ms` | ms | Time to hold position (must be > 0) |
+
+Counts as one segment toward `n_segs`.  The motor does not move; the
+firmware simply waits for the specified duration before advancing to the
+next segment.
+
 #### `CMD SET_TELEM_RATE <hz>`
 
 Set telemetry stream rate.  Range: `0` (off) to `MAX_TELEM_RATE_HZ` (50).
@@ -113,13 +144,17 @@ sequenceDiagram
     participant PY as Python UI
     participant FW as Firmware
 
-    PY->>FW: CMD BEGIN_SEGMENTED_MOVE <n_segs> <n_dips> <dbot_ms> <dtop_ms>
+    PY->>FW: CMD BEGIN_SEGMENTED_MOVE <n_segs>
     FW-->>PY: ACK BEGIN_SEGMENTED_MOVE
 
-    Note over FW: enters segment-collection mode<br/>only MOVE_SEG and ESTOP accepted
+    Note over FW: enters segment-collection mode<br/>only MOVE_SEG, DWELL_SEG, and ESTOP accepted
 
     loop n_segs times
-        PY->>FW: CMD MOVE_SEG <dist_mm> <speed_mm_s>
+        alt motion segment
+            PY->>FW: CMD MOVE_SEG <dist_mm> <speed_mm_s> [accel_mm_s2]
+        else dwell segment
+            PY->>FW: CMD DWELL_SEG <dwell_ms>
+        end
     end
 
     FW-->>PY: ACK PROFILE_READY
@@ -144,8 +179,9 @@ during collection mode aborts with `ERR CMD segment_collection_aborted`.
 | `invalid_state` | Command not valid in the current system state |
 | `invalid_params` | One or more numeric parameters are out of range |
 | `bad_args` / `bad_speed` | Direction or speed argument malformed |
-| `segment_collection_aborted` | Non-MOVE_SEG command received during collection |
-| `not_in_segment_collection` | MOVE_SEG received outside collection mode |
+| `segment_collection_aborted` | Non-MOVE_SEG/DWELL_SEG command received during collection |
+| `not_in_segment_collection` | MOVE_SEG or DWELL_SEG received outside collection mode |
+| `bad_dwell_ms` | DWELL_SEG: dwell_ms is zero or negative |
 | `seg_buffer_overflow` | More segments than `MOVE_SEG_BUFFER_SIZE` |
 | `segment_collection_incomplete` | RUN_LOADED_MOVE before all segments received |
 | `min_must_be_less_than_max` | SET_SOFT_LIMITS: min ≥ max |

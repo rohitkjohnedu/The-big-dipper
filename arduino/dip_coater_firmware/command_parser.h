@@ -107,6 +107,7 @@ private:
     void cmdRunProfile(char* p);
     void cmdBeginSegmentedMove(char* p);
     void cmdMoveSeg(char* p);
+    void cmdDwellSeg(char* p);
     void cmdMove(char* p);
     void cmdRunLoadedMove();
     void cmdSetTelemRate(char* p);
