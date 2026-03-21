@@ -17,3 +17,9 @@ dev = [
     "pytest",
     "pytest-qt",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "hardware: tests that require a physical Arduino connected via serial (deselect with '-m not hardware')",
+]
