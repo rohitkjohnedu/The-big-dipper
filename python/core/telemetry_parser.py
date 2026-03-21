@@ -20,6 +20,7 @@ Example::
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Final
 
@@ -168,6 +169,13 @@ def parse(line: str) -> TelemetryFrame | None:
         accel_mm_s2:        float = float(parts[5])
     except ValueError as exc:
         log.warning("telemetry_parser: numeric conversion error in %r: %s", line, exc)
+        return None
+
+    # Reject non-finite float values (inf, -inf, nan).  The Arduino never
+    # produces these, so their presence indicates a corrupt serial frame.
+    _floats: list[float] = [pos_mm, vel_actual_mm_s, vel_commanded_mm_s, accel_mm_s2]
+    if any(not math.isfinite(v) for v in _floats):
+        log.warning("telemetry_parser: non-finite float value in %r", line)
         return None
 
     # --- Step 5: validate string enumeration fields --------------------------

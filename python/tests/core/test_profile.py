@@ -83,8 +83,16 @@ class TestConstruction:
         assert make_profile().velocity_profile_type == expected_type
 
     def test_segmented_velocity_profile_type(self) -> None:
-        """velocity_profile_type = 'segmented' must be accepted."""
-        p: DipProfile = make_profile(velocity_profile_type="segmented")
+        """velocity_profile_type = 'segmented' with a valid segments list must be accepted."""
+        segments: list[dict[str, Any]] = [
+            {"type": "move",  "distance_mm": -10.0, "speed_mm_s": 5.0, "accel_mm_s2": 50.0},
+            {"type": "dwell", "duration_ms": 500},
+            {"type": "move",  "distance_mm": 10.0,  "speed_mm_s": 5.0, "accel_mm_s2": 50.0},
+        ]
+        p: DipProfile = make_profile(
+            velocity_profile_type="segmented",
+            velocity_profile_data={"segments": segments},
+        )
         assert p.velocity_profile_type == "segmented"
 
     def test_spline_velocity_profile_type(self) -> None:
@@ -137,6 +145,70 @@ class TestValidation:
         with pytest.raises(ValueError):
             make_profile(velocity_profile_type="cubic")
 
+    def test_multiple_errors_reported_together(self) -> None:
+        """
+        All validation errors must be collected and reported in one ValueError.
+
+        ``_validate`` accumulates all errors rather than failing on the first
+        one, so callers see the complete set of problems at once.
+        """
+        with pytest.raises(ValueError) as exc_info:
+            make_profile(dip_speed_mm_s=-1.0, withdraw_speed_mm_s=-1.0, n_dips=0)
+        msg: str = str(exc_info.value)
+        assert "dip_speed_mm_s" in msg
+        assert "withdraw_speed_mm_s" in msg
+        assert "n_dips" in msg
+
+
+# ---------------------------------------------------------------------------
+# Segmented profile validation
+# ---------------------------------------------------------------------------
+
+class TestSegmentedProfileValidation:
+    """Verify validation of velocity_profile_data for segmented profiles."""
+
+    def test_segmented_without_segments_key_raises(self) -> None:
+        """A segmented profile with no 'segments' key must raise ValueError."""
+        with pytest.raises(ValueError):
+            make_profile(
+                velocity_profile_type="segmented",
+                velocity_profile_data={},
+            )
+
+    def test_segmented_with_non_list_segments_raises(self) -> None:
+        """A segmented profile where 'segments' is not a list must raise ValueError."""
+        with pytest.raises(ValueError):
+            make_profile(
+                velocity_profile_type="segmented",
+                velocity_profile_data={"segments": "not a list"},
+            )
+
+    def test_segmented_with_invalid_segment_type_raises(self) -> None:
+        """A segment dict with an unrecognised 'type' value must raise ValueError."""
+        with pytest.raises(ValueError):
+            make_profile(
+                velocity_profile_type="segmented",
+                velocity_profile_data={
+                    "segments": [{"type": "invalid", "distance_mm": 10.0}]
+                },
+            )
+
+    def test_valid_segmented_profile_constructs(self) -> None:
+        """A well-formed segmented profile must construct without error."""
+        segments: list[dict[str, Any]] = [
+            {"type": "move",  "distance_mm": -30.0, "speed_mm_s": 5.0,
+             "accel_mm_s2": 50.0, "comment": "descend"},
+            {"type": "dwell", "duration_ms": 2000, "comment": "soak"},
+            {"type": "move",  "distance_mm": 30.0,  "speed_mm_s": 15.0,
+             "accel_mm_s2": 50.0, "comment": "ascend"},
+        ]
+        p: DipProfile = make_profile(
+            velocity_profile_type="segmented",
+            velocity_profile_data={"segments": segments},
+        )
+        assert p.velocity_profile_type == "segmented"
+        assert len(p.velocity_profile_data["segments"]) == 3
+
 
 # ---------------------------------------------------------------------------
 # Save / load round-trip
@@ -186,11 +258,16 @@ class TestSaveLoad:
             load_profile(missing_path)
 
     def test_missing_required_field_raises(self, tmp_path: Path) -> None:
-        """A JSON file missing required fields must raise ValueError or KeyError."""
+        """A JSON file missing required fields must raise ValueError.
+
+        ``load_profile`` catches internal ``KeyError`` exceptions and re-raises
+        them as ``ValueError`` with a descriptive message, so callers only need
+        to handle one exception type.
+        """
         path: Path = tmp_path / "bad.json"
         incomplete: dict[str, Any] = {"name": "x", "dip_speed_mm_s": 10}
         path.write_text(json.dumps(incomplete), encoding="utf-8")
-        with pytest.raises((ValueError, KeyError)):
+        with pytest.raises(ValueError):
             load_profile(path)
 
     def test_invalid_json_raises(self, tmp_path: Path) -> None:

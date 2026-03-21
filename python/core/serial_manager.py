@@ -171,6 +171,13 @@ class SerialManager:
         # if the thread is stuck in a long readline() call.
         if self._thread is not None:
             self._thread.join(timeout=3.0)
+            if self._thread.is_alive():
+                # Thread did not exit within the timeout — log a warning.
+                # This can happen if readline() is blocked on a slow serial
+                # port.  The daemon flag ensures it will not prevent process exit.
+                log.warning(
+                    "serial read thread did not exit within 3 s — continuing anyway"
+                )
             self._thread = None
 
         # Close the serial port after the thread has exited.
@@ -212,8 +219,14 @@ class SerialManager:
 
         with self._write_lock:
             if self._serial is not None and self._serial.is_open:
-                self._serial.write(cmd.encode("ascii"))
-                log.debug("TX → %r", cmd.rstrip())
+                try:
+                    self._serial.write(cmd.encode("ascii"))
+                    log.debug("TX → %r", cmd.rstrip())
+                except serial.SerialException as exc:
+                    # Port was disconnected between the is_open check and write().
+                    # Log and swallow — the read loop will detect the disconnect
+                    # on its next readline() call and exit cleanly.
+                    log.error("send_command(%r) failed: %s", cmd.rstrip(), exc)
             else:
                 log.warning(
                     "send_command(%r) dropped — serial port is not open", cmd.rstrip()
@@ -256,7 +269,11 @@ class SerialManager:
         This method must *never* touch PyQt6 widgets — all UI updates must
         go through signals/slots on the main thread.
         """
-        assert self._serial is not None  # guaranteed by start()
+        # start() guarantees _serial is not None before launching this thread,
+        # but guard defensively so the thread exits cleanly rather than crashing.
+        if self._serial is None:
+            log.error("_read_loop entered with no serial port — exiting immediately")
+            return
 
         while self._running:
             # --- Read one line from the serial port --------------------------

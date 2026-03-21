@@ -258,3 +258,21 @@ class TestMalformedInput:
             assert result is None
         except Exception as exc:
             pytest.fail(f"parse() raised unexpectedly: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Non-finite float values — must be rejected
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_value", ["inf", "-inf", "nan", "Infinity", "-Infinity"])
+def test_non_finite_float_rejected(bad_value: str) -> None:
+    """
+    Float fields containing inf, -inf, or nan must return None.
+
+    The Arduino never produces non-finite values; their presence indicates
+    a corrupt serial frame.  Python's float() happily converts "inf" and
+    "nan" strings, so the parser must explicitly guard against them.
+    """
+    line: str = f"TELEM,100,{bad_value},0.00,0.00,0.00,RUNNING,DESCENDING"
+    result: TelemetryFrame | None = parse(line)
+    assert result is None

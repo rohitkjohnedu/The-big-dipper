@@ -118,6 +118,8 @@ class DipProfile:
     notes:                 str            = ""
     created_at:            str            = ""
     velocity_profile_type: str            = "trapezoidal"
+    # Mutable default — must use field(default_factory=…) so each DipProfile
+    # instance gets its own dict rather than sharing one across all instances.
     velocity_profile_data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -189,10 +191,9 @@ def load_profile(path: str | Path) -> DipProfile:
         FileNotFoundError:   If ``path`` does not exist.
         json.JSONDecodeError: If the file is not valid JSON.
         ValueError:          If a required field is missing or a value fails
-                             validation (e.g. negative speed).
-        KeyError:            If a required top-level field is absent from the
-                             JSON object (wrapped in ``ValueError`` with a
-                             descriptive message).
+                             validation (e.g. negative speed).  Missing fields
+                             are caught as ``KeyError`` internally and re-raised
+                             as ``ValueError`` with a descriptive message.
     """
     path = Path(path)
 
@@ -313,6 +314,34 @@ def _validate(p: DipProfile) -> None:
             f"velocity_profile_type must be one of {sorted(_VALID_PROFILE_TYPES)}, "
             f"got {p.velocity_profile_type!r}"
         )
+
+    # --- Segmented profile data structure ------------------------------------
+    # Only validated when the type is "segmented"; other types leave
+    # velocity_profile_data empty or with type-specific keys.
+    if p.velocity_profile_type == "segmented":
+        segments: Any = p.velocity_profile_data.get("segments")
+        if segments is None:
+            errors.append(
+                "velocity_profile_data must contain a 'segments' key "
+                "when velocity_profile_type is 'segmented'"
+            )
+        elif not isinstance(segments, list):
+            errors.append(
+                f"velocity_profile_data['segments'] must be a list, "
+                f"got {type(segments).__name__!r}"
+            )
+        else:
+            # Validate each individual segment dict.
+            seg: Any
+            for i, seg in enumerate(segments):
+                if not isinstance(seg, dict):
+                    errors.append(f"segments[{i}] must be a dict, got {type(seg).__name__!r}")
+                    continue
+                seg_type: Any = seg.get("type")
+                if seg_type not in ("move", "dwell"):
+                    errors.append(
+                        f"segments[{i}]['type'] must be 'move' or 'dwell', got {seg_type!r}"
+                    )
 
     # --- Raise if any errors were found --------------------------------------
     if errors:
