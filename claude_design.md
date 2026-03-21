@@ -337,8 +337,25 @@ class DipProfile:
     n_dips: int
     notes: str = ""
     created_at: str = ""
-    velocity_profile_type: str = "trapezoidal"   # "trapezoidal" | "spline"
-    velocity_profile_data: dict = field(default_factory=dict)  # spline waypoints go here
+    velocity_profile_type: str = "trapezoidal"   # "trapezoidal" | "segmented" | "spline"
+    velocity_profile_data: dict = field(default_factory=dict)
+
+# velocity_profile_data contents by type:
+#
+#   "trapezoidal" → {} (empty — all params are top-level DipProfile fields)
+#
+#   "segmented"   → {"segments": [
+#                       {"type": "move",  "distance_mm": -30.0, "speed_mm_s": 5.0,
+#                        "accel_mm_s2": 50.0, "comment": "slow descent"},
+#                       {"type": "dwell", "duration_ms": 2000, "comment": "soak"},
+#                       {"type": "move",  "distance_mm": 50.0,  "speed_mm_s": 15.0,
+#                        "accel_mm_s2": 50.0, "comment": "fast withdraw"}
+#                    ]}
+#                   comment is optional, stored in JSON, ignored during execution.
+#                   Repetition is baked into the list — add the pattern N times for N dips.
+#                   Maps directly to CMD BEGIN_SEGMENTED_MOVE / MOVE_SEG / DWELL_SEG / RUN_LOADED_MOVE.
+#
+#   "spline"      → spline waypoints (future — not yet implemented)
 
 save_profile(profile, path) → JSON
 load_profile(path) → DipProfile
@@ -392,6 +409,14 @@ Standard trapezoidal: linear accel ramp → constant speed → linear decel ramp
 Parameters: target_speed_mm_s, accel_mm_s2, distance_mm
 to_segments() implemented analytically — no sampling needed
 Also supports CMD RUN_PROFILE shortcut — command_interface uses this for trapezoidal profiles instead of streaming segments, since the Arduino can compute it natively
+
+motion/segmented_profile.py
+
+Not a VelocityProfile subclass — segmented moves are a flat list of steps, not a continuous velocity curve.
+Owns a list of MoveStep / DwellStep objects loaded from velocity_profile_data["segments"].
+Validates each step on construction.
+to_arduino_segments() → list of (cmd_string) ready to send as MOVE_SEG / DWELL_SEG lines.
+comment field on each step is preserved in JSON, ignored during execution.
 
 motion/spline_profile.py — Stub
 
@@ -555,17 +580,18 @@ uv run pytest            # run tests
 11. core/data_recorder.py
 12. motion/velocity_profile.py        (abstract base class + MoveSegment)
 13. motion/trapezoidal_profile.py     + tests
-14. motion/spline_profile.py          (stub)
-15. mock_arduino.py
-16. widgets/estop_button.py
-17. widgets/live_plot.py
-18. widgets/status_bar.py
-19. ui/tabs/control_tab.py
-20. ui/tabs/telemetry_tab.py
-21. ui/tabs/profile_manager_tab.py
-22. ui/tabs/profile_editor_tab.py     (stub)
-23. ui/main_window.py
-24. main.py
+14. motion/segmented_profile.py       + tests
+15. motion/spline_profile.py          (stub)
+16. mock_arduino.py
+17. widgets/estop_button.py
+18. widgets/live_plot.py
+19. widgets/status_bar.py
+20. ui/tabs/control_tab.py
+21. ui/tabs/telemetry_tab.py
+22. ui/tabs/profile_manager_tab.py
+23. ui/tabs/profile_editor_tab.py     (stub)
+24. ui/main_window.py
+25. main.py
 
 ## Starting point
 
