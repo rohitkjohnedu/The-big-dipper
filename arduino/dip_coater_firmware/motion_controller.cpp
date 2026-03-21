@@ -160,13 +160,36 @@ void MotionController::setSoftLimits(float minMm, float maxMm) {
 }
 
 void MotionController::stop() {
-    // Reset internal mode and dwell state so update() does nothing,
-    // then issue a soft-stop to let the motor decelerate naturally.
+    bool  wasJog     = (_mode == ProfileMode::JOG);
+    float savedSpeed = _commandedVelocityMms;   // save before zeroing
+
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
     _sm.toReady();
-    _stepper.stop(SOFT);
+
+    if (wasJog) {
+        // JOG uses runContinous() (velocity mode).  stop(SOFT) in velocity mode
+        // blocks the main loop for the full decel period.
+        //
+        // Instead: compute the kinematic braking distance (v² / 2a) and command
+        // a position-mode move to that point.  Position mode uses the TMC5130
+        // hardware ramp — non-blocking, so loop() and telemetry keep running
+        // during decel.  The next setSpeed() call from any subsequent command
+        // restores max velocity automatically.
+        float decelMm = (savedSpeed * savedSpeed) / (2.0f * _accelMms2);
+        float target  = positionMm() + (_jogUp ? decelMm : -decelMm);
+
+        // Clamp to soft limits so checkSoftLimit() does not reject the move.
+        if (target > _softLimitMaxMm) target = _softLimitMaxMm;
+        if (target < _softLimitMinMm) target = _softLimitMinMm;
+
+        startMoveToMm(target, savedSpeed);
+    } else {
+        // Position-mode moves (TRAPEZOIDAL, SEGMENTED, MOVING): stop(SOFT) is
+        // non-blocking in position mode.
+        _stepper.stop(SOFT);
+    }
 }
 
 void MotionController::estop() {
@@ -194,13 +217,26 @@ void MotionController::pause() {
     // Clear the active mode so update() stops running the profile,
     // then soft-stop the motor and enter PAUSED state.
     // Also clear limit-backoff flags so the backoff is not re-entered on resume.
+    bool  wasJog     = (_mode == ProfileMode::JOG);
+    float savedSpeed = _commandedVelocityMms;
+
     _paused             = true;
     _mode               = ProfileMode::NONE;
     _inDwell            = false;
     _limitTriggered     = false;
     _limitBackoffActive = false;
     _sm.toPaused();
-    _stepper.stop(SOFT);
+
+    if (wasJog) {
+        // Same non-blocking decel as stop() — see stop() for full rationale.
+        float decelMm = (savedSpeed * savedSpeed) / (2.0f * _accelMms2);
+        float target  = positionMm() + (_jogUp ? decelMm : -decelMm);
+        if (target > _softLimitMaxMm) target = _softLimitMaxMm;
+        if (target < _softLimitMinMm) target = _softLimitMinMm;
+        startMoveToMm(target, savedSpeed);
+    } else {
+        _stepper.stop(SOFT);
+    }
 }
 
 void MotionController::resume() {
