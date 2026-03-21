@@ -1,20 +1,41 @@
 """
 core/serial_manager.py
+======================
 
-Owns the serial.Serial connection to the Arduino and runs the read loop
-in a background thread.
+Owns the ``serial.Serial`` connection to the Arduino and runs the serial
+read loop in a dedicated background thread.
 
-Threading model (from the design doc):
-  - Serial thread  : reads lines, routes TELEM to telem_queue,
-                     ACK/ERR/STATE to response_queue.  Never touches the UI.
-  - UI / main thread: calls send_command() which is thread-safe.
+Threading model
+---------------
+The design doc mandates three threads:
 
-Usage:
+* **Serial thread** (this module): reads incoming lines from the Arduino,
+  classifies each line as TELEM or a command response, and puts it onto the
+  appropriate ``queue.Queue``.  This thread *never* touches PyQt6 widgets.
+* **Data / UI thread**: consumes ``telem_queue`` and ``response_queue`` via
+  Qt signals/slots.  Always runs in the main thread.
+
+``send_command()`` is thread-safe and may be called from any thread.
+
+Line routing
+------------
+Every line received from the Arduino is routed to one of two queues:
+
+* Lines starting with ``"TELEM,"`` are parsed into ``TelemetryFrame`` objects
+  and placed on ``telem_queue``.
+* All other lines (``ACK``, ``ERR``, ``STATE``, freeform debug prints) are
+  placed as raw strings on ``response_queue``.
+
+Usage example::
+
     mgr = SerialManager(port="COM3", baud=115200)
-    mgr.start()                          # opens port, starts read thread
+    mgr.start()
+
     mgr.send_command("CMD HOME")
-    response = mgr.response_queue.get(timeout=5)
-    frame    = mgr.telem_queue.get(timeout=2)
+    ack = mgr.response_queue.get(timeout=5)   # blocks until ACK/ERR arrives
+
+    frame = mgr.telem_queue.get(timeout=2)    # blocks until next TELEM frame
+
     mgr.stop()
 """
 
@@ -22,131 +43,250 @@ import logging
 import queue
 import threading
 import time
+from typing import Final, Optional
 
 import serial
 
-from core.telemetry_parser import TelemetryFrame, parse as parse_telem
+from core.telemetry_parser import TelemetryFrame
+from core.telemetry_parser import parse as _parse_telem
 
-log = logging.getLogger(__name__)
+# Module-level logger — messages appear under "core.serial_manager".
+log: Final[logging.Logger] = logging.getLogger(__name__)
+
+# Time (seconds) to wait after opening the serial port before sending any
+# commands.  The Arduino resets when the port is opened; without this delay
+# the first command may arrive before setup() has finished executing.
+_ARDUINO_RESET_DELAY_S: Final[float] = 2.0
 
 
 class SerialManager:
     """
     Manages a single serial connection to the Arduino.
 
+    Opens the port in ``start()``, spawns a daemon read thread, and closes
+    everything cleanly in ``stop()``.  The two public queues expose parsed
+    data to the rest of the application without requiring any locking on the
+    consumer side (``queue.Queue`` is already thread-safe).
+
     Attributes:
-        telem_queue:    queue.Queue[TelemetryFrame]  — parsed telemetry frames.
-        response_queue: queue.Queue[str]             — raw ACK/ERR/STATE lines.
+        telem_queue:    ``queue.Queue[TelemetryFrame]`` — parsed telemetry
+                        frames, produced by the serial thread and consumed
+                        by the data/UI thread.
+        response_queue: ``queue.Queue[str]`` — raw ACK/ERR/STATE lines,
+                        consumed by ``CommandInterface`` after each command.
     """
 
-    def __init__(self, port: str, baud: int = 115200, timeout: float = 1.0):
+    def __init__(
+        self,
+        port: str,
+        baud: int = 115200,
+        timeout: float = 1.0,
+    ) -> None:
         """
+        Initialise the manager.  Does *not* open the serial port — call
+        ``start()`` to do that.
+
         Args:
-            port:    Serial port name ("COM3", "/dev/ttyUSB0", etc.).
-            baud:    Baud rate — must match SERIAL_BAUD_RATE in config.h (115200).
-            timeout: Read timeout in seconds for the serial port.
+            port:    Serial port identifier, e.g. ``"COM3"`` on Windows or
+                     ``"/dev/ttyUSB0"`` on Linux.
+            baud:    Baud rate.  Must match ``SERIAL_BAUD_RATE`` in the
+                     Arduino ``config.h`` (default 115200).
+            timeout: Read timeout for ``serial.Serial`` in seconds.  Controls
+                     how long ``readline()`` blocks before returning an empty
+                     bytes object.  Shorter values make ``stop()`` faster to
+                     return; longer values reduce CPU spinning.
         """
-        self._port    = port
-        self._baud    = baud
-        self._timeout = timeout
+        # --- Connection parameters -------------------------------------------
+        self._port:    str   = port
+        self._baud:    int   = baud
+        self._timeout: float = timeout
 
-        self._serial:  serial.Serial | None = None
-        self._thread:  threading.Thread | None = None
-        self._running  = False
-        self._lock     = threading.Lock()   # guards _serial.write()
+        # --- Internal state --------------------------------------------------
+        # _serial is None until start() is called.
+        self._serial:  Optional[serial.Serial] = None
+        # _thread is None until start() is called.
+        self._thread:  Optional[threading.Thread] = None
+        # Flag used to signal the read thread to exit its loop.
+        self._running: bool = False
+        # Lock that serialises concurrent write() calls from different threads.
+        self._write_lock: threading.Lock = threading.Lock()
 
+        # --- Public queues ---------------------------------------------------
+        # Unbounded queues — the consumer (UI) is expected to drain them promptly.
         self.telem_queue:    queue.Queue[TelemetryFrame] = queue.Queue()
         self.response_queue: queue.Queue[str]            = queue.Queue()
 
     # -------------------------------------------------------------------------
-    # Public interface
+    # Lifecycle
     # -------------------------------------------------------------------------
 
     def start(self) -> None:
-        """Open the serial port and start the background read thread."""
+        """
+        Open the serial port and start the background read thread.
+
+        Blocks for ``_ARDUINO_RESET_DELAY_S`` seconds after opening the port
+        to allow the Arduino to complete its reset cycle before any commands
+        are sent.
+
+        Raises:
+            serial.SerialException: If the port cannot be opened (e.g. wrong
+                                    port name, device not connected).
+        """
+        # Open the serial port.  The Arduino resets on DTR toggle (default
+        # behaviour of pyserial) so we must wait before sending commands.
         self._serial = serial.Serial(
             port     = self._port,
             baudrate = self._baud,
             timeout  = self._timeout,
         )
-        # Give the Arduino time to reset after the serial port opens.
-        # Without this delay the first command may arrive before the firmware
-        # has finished its setup() routine.
-        time.sleep(2.0)
+        log.info("Serial port %s opened at %d baud", self._port, self._baud)
 
+        # Wait for the Arduino to finish its setup() routine.
+        log.debug("Waiting %.1f s for Arduino reset…", _ARDUINO_RESET_DELAY_S)
+        time.sleep(_ARDUINO_RESET_DELAY_S)
+
+        # Start the read thread as a daemon so it does not prevent the process
+        # from exiting if stop() is not called explicitly (e.g. on crash).
         self._running = True
-        self._thread  = threading.Thread(target=self._read_loop, daemon=True, name="serial-reader")
+        self._thread  = threading.Thread(
+            target = self._read_loop,
+            daemon = True,
+            name   = "serial-reader",
+        )
         self._thread.start()
-        log.info("SerialManager started on %s at %d baud", self._port, self._baud)
+        log.info("SerialManager started on %s", self._port)
 
     def stop(self) -> None:
-        """Signal the read thread to stop and close the serial port."""
+        """
+        Signal the read thread to exit and close the serial port.
+
+        Blocks until the read thread terminates (up to 3 seconds) before
+        closing the port to avoid a race between the thread's last
+        ``readline()`` call and the port being closed underneath it.
+        """
+        # Signal the thread to stop on its next loop iteration.
         self._running = False
-        if self._thread:
+
+        # Join the thread with a timeout so stop() does not hang indefinitely
+        # if the thread is stuck in a long readline() call.
+        if self._thread is not None:
             self._thread.join(timeout=3.0)
             self._thread = None
-        if self._serial and self._serial.is_open:
+
+        # Close the serial port after the thread has exited.
+        if self._serial is not None and self._serial.is_open:
             self._serial.close()
             self._serial = None
+
         log.info("SerialManager stopped")
+
+    # -------------------------------------------------------------------------
+    # Public command interface
+    # -------------------------------------------------------------------------
 
     def send_command(self, cmd: str) -> None:
         """
-        Send a command string to the Arduino.
+        Send a command string to the Arduino over the serial port.
 
-        Thread-safe — may be called from any thread.
-        A newline is appended automatically if not already present.
+        Thread-safe: protected by an internal write lock so this method may be
+        called from the UI thread, the data thread, or any other context
+        without risk of interleaved writes corrupting the serial stream.
+
+        A newline character (``\\n``) is appended automatically if the string
+        does not already end with one, matching the Arduino's ``\\n``-terminated
+        line protocol.
 
         Args:
-            cmd: Command string, e.g. "CMD HOME" or "CMD JOG UP 10".
+            cmd: Command string to send, e.g. ``"CMD HOME"`` or
+                 ``"CMD JOG UP 10.0000"``.  Must be ASCII-encodable.
+
+        Note:
+            If the serial port is not open (i.e. ``start()`` has not been
+            called or ``stop()`` has already been called), the command is
+            dropped and a warning is logged.  No exception is raised to
+            avoid crashing the UI on a disconnection event.
         """
+        # Ensure the line is newline-terminated before encoding.
         if not cmd.endswith("\n"):
             cmd += "\n"
-        with self._lock:
-            if self._serial and self._serial.is_open:
+
+        with self._write_lock:
+            if self._serial is not None and self._serial.is_open:
                 self._serial.write(cmd.encode("ascii"))
-                log.debug("TX: %r", cmd.rstrip())
+                log.debug("TX → %r", cmd.rstrip())
             else:
-                log.warning("send_command called but serial port is not open")
+                log.warning(
+                    "send_command(%r) dropped — serial port is not open", cmd.rstrip()
+                )
+
+    # -------------------------------------------------------------------------
+    # Properties
+    # -------------------------------------------------------------------------
 
     @property
     def is_connected(self) -> bool:
-        """True if the serial port is open."""
-        return bool(self._serial and self._serial.is_open)
+        """
+        ``True`` if the serial port is currently open, ``False`` otherwise.
+
+        Safe to call from any thread.
+        """
+        return self._serial is not None and self._serial.is_open
 
     # -------------------------------------------------------------------------
-    # Background read loop
+    # Background read loop (runs in serial thread)
     # -------------------------------------------------------------------------
 
     def _read_loop(self) -> None:
         """
         Read lines from the serial port and route them to the correct queue.
 
-        Runs in the serial thread — never touches the UI.
-        Exits when _running is set to False or the port is closed.
+        This method runs in the serial thread for the lifetime of the
+        connection.  It exits when ``_running`` is set to ``False`` (by
+        ``stop()``) or when a ``SerialException`` occurs (e.g. USB disconnect).
+
+        Line routing:
+
+        * Lines starting with ``"TELEM,"`` are parsed into
+          ``TelemetryFrame`` objects via ``telemetry_parser.parse()`` and
+          placed on ``telem_queue``.  Malformed TELEM lines are silently
+          dropped (the parser logs a warning).
+        * All other lines are placed as raw strings on ``response_queue``
+          for ``CommandInterface`` to consume.
+
+        This method must *never* touch PyQt6 widgets — all UI updates must
+        go through signals/slots on the main thread.
         """
+        assert self._serial is not None  # guaranteed by start()
+
         while self._running:
+            # --- Read one line from the serial port --------------------------
             try:
-                raw = self._serial.readline()
+                raw_bytes: bytes = self._serial.readline()
             except serial.SerialException as exc:
+                # Port disconnected or other hardware error — exit the loop.
                 log.error("Serial read error: %s", exc)
                 break
 
-            if not raw:
-                # readline() timed out — no data, loop and try again.
+            # readline() returns b"" on timeout — no data available, loop again.
+            if not raw_bytes:
                 continue
 
-            line = raw.decode("ascii", errors="replace").strip()
+            # Decode bytes to string, replacing any non-ASCII bytes with '?'
+            # so a single corrupt byte does not crash the read loop.
+            line: str = raw_bytes.decode("ascii", errors="replace").strip()
+
             if not line:
+                # Skip blank lines (e.g. a lone \r\n from the Arduino).
                 continue
 
-            log.debug("RX: %r", line)
+            log.debug("RX ← %r", line)
 
-            # Route TELEM lines to the telemetry queue, everything else
-            # (ACK, ERR, STATE, freeform prints) to the response queue.
+            # --- Route to the appropriate queue ------------------------------
             if line.startswith("TELEM,"):
-                frame = parse_telem(line)
+                # Parse and enqueue — malformed lines return None and are dropped.
+                frame: Optional[TelemetryFrame] = _parse_telem(line)
                 if frame is not None:
                     self.telem_queue.put(frame)
             else:
+                # ACK, ERR, STATE, or any freeform print from the firmware.
                 self.response_queue.put(line)
