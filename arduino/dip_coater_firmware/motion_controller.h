@@ -235,7 +235,7 @@ private:
     bool     _inDwell;
 
     // Homing state
-    bool _homingBackoffActive;
+    bool _homingBackoffActive;  ///< True while executing the post-endstop backoff move
 
     // Limit-switch backoff state (set from ISR, cleared in update())
     volatile bool _limitTriggered;    ///< New limit event pending

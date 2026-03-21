@@ -365,6 +365,8 @@ void MotionController::onEndstopTriggered(bool isTop) {
     // short backoff move away from the endstop.  The backoff is executed in
     // updateLimitBackoff() on the next loop() iteration (not here in the ISR)
     // because startMoveToMm() is not ISR-safe on all platforms.
+    // The encoder origin (set by CMD HOME) is intentionally NOT touched here —
+    // the absolute backoff target in updateLimitBackoff() references it.
     _stepper.stop(HARD);
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
@@ -481,20 +483,17 @@ bool MotionController::checkSoftLimit(float targetMm) {
 // =============================================================================
 
 void MotionController::updateHoming() {
-    // Phase 1 (homingBackoffActive == false):
-    //   The motor is moving upward toward the top endstop via moveAngle().
-    //   We wait here — the ISR fires when the endstop is hit, zeroes the encoder,
-    //   and starts the backoff move, setting _homingBackoffActive = true.
+    // Waiting for the top endstop ISR to fire and set _homingBackoffActive.
     if (!_homingBackoffActive) return;
 
-    // Phase 2 (homingBackoffActive == true):
-    //   The backoff move is in progress.  Wait for it to complete, then
-    //   declare the system homed and transition to READY.
-    if (isMoveComplete()) {
-        _mode                 = ProfileMode::NONE;
-        _commandedVelocityMms = 0.0f;
-        _sm.toReady();
-    }
+    // Backoff move in progress — wait for it to finish.
+    if (!isMoveComplete()) return;
+
+    // Backoff complete — homing done.
+    TR("homing: backoff done -> READY");
+    _mode                 = ProfileMode::NONE;
+    _commandedVelocityMms = 0.0f;
+    _sm.toReady();
 }
 
 // =============================================================================
@@ -638,10 +637,21 @@ void MotionController::updateLimitBackoff() {
 
         // Back off away from whichever endstop fired.
         // Coordinate convention: home (top) = 0, positive = up, negative = down.
-        //   Top triggered    → current pos ≈ 0, move down (subtract backoff)
-        //   Bottom triggered → current pos is negative, move up (add backoff)
+        //
+        //   Top triggered    → use an ABSOLUTE target of -LIMIT_BACKOFF_MM.
+        //                      The top endstop IS the home position (0 mm), so
+        //                      this is always exactly LIMIT_BACKOFF_MM below the
+        //                      physical switch regardless of how far the motor
+        //                      overshot before stopping.  positionMm() is NOT
+        //                      used because at 50 mm/s the motor may have coasted
+        //                      +7 mm past the switch, making a relative backoff
+        //                      land above the switch rather than below it.
+        //                      The encoder origin set by CMD HOME is preserved.
+        //
+        //   Bottom triggered → no calibrated reference; use a relative backoff
+        //                      from wherever the motor stopped.
         float target = _limitIsTop
-            ? positionMm() - LIMIT_BACKOFF_MM
+            ? -LIMIT_BACKOFF_MM
             : positionMm() + LIMIT_BACKOFF_MM;
         _limitBackoffActive = true;
         _limitBackoffStart  = now;

@@ -36,7 +36,7 @@
 // Homing
 // =============================================================================
 
-#define HOMING_SPEED_MM_S        20.0f      ///< Speed while seeking the top endstop (mm/s)
+#define HOMING_SPEED_MM_S        20.0f      ///< Speed for the approach to the top endstop (mm/s)
 #define HOMING_BACKOFF_MM         5.0f      ///< Distance to back off from the endstop after contact (mm)
 #define HOMING_ACC_MM_S2         20.0f      ///< Acceleration used during homing (mm/s²)
 
