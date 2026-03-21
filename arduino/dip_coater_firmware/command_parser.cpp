@@ -1,4 +1,5 @@
 #include "command_parser.h"
+#include "telemetry.h"
 
 // =============================================================================
 // Number parsing helpers — avoid sscanf (unreliable on STM32)
@@ -426,7 +427,7 @@ void CommandParser::cmdSetTelemRate(char* p) {
         return;
     }
     _telemRateHz = (uint8_t)hz;
-    // _telem->setRate(_telemRateHz) will be wired here in step 7
+    if (_telem) _telem->setRate(_telemRateHz);
     ack("SET_TELEM_RATE");
 }
 

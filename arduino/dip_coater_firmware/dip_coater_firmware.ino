@@ -12,7 +12,8 @@
 //   MotionController — owns the stepper driver, executes all motion commands
 //   Diagnostics      — hardware self-tests triggered by serial DIAG commands
 //   CommandParser    — owns all serial I/O, dispatches CMD and DIAG commands
-//   Telemetry        — streams position/velocity to Python UI  (step 7 — TODO)
+//   Telemetry        — streams position/velocity/state to Python UI at a
+//                      configurable rate (default DEFAULT_TELEM_RATE_HZ)
 //
 // Coordinate system
 // -----------------
@@ -26,6 +27,7 @@
 #include "motion_controller.h"
 #include "diagnostics.h"
 #include "command_parser.h"
+#include "telemetry.h"
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -34,6 +36,7 @@
 StateMachine     sm;
 MotionController mc(sm);
 Diagnostics      diag;
+Telemetry        telem(mc, sm);
 CommandParser    commandParser(sm, mc, diag);
 
 // -----------------------------------------------------------------------------
@@ -68,7 +71,9 @@ void setup() {
 
     mc.begin();
     diag.begin(mc, sm);
+    telem.begin();
     commandParser.begin();
+    commandParser.setTelemetry(&telem);
 
     Serial.println("Dip coater ready. State: IDLE");
     Serial.println("Type HELP for command list.");
@@ -82,5 +87,5 @@ void loop() {
     commandParser.update();   // read serial, dispatch commands
     mc.update();              // service active motion mode
     diag.update();            // service active diagnostic test
-    // TODO step 7: telemetry.update();
+    telem.update();           // broadcast telemetry at configured rate
 }
