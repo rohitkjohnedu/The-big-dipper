@@ -84,9 +84,9 @@ public:
      * @param dwellTopMs       Time to dwell at the top between dips (ms).
      * @param nDips            Number of dip cycles to execute.
      */
-    void runProfile(float dipSpeedMms, float withdrawSpeedMms,
-                    float accelMms2,   float depthMm,
-                    int   dwellBottomMs, int dwellTopMs, int nDips);
+    void runProfile(float    dipSpeedMms, float withdrawSpeedMms,
+                    float    accelMms2,   float depthMm,
+                    uint32_t dwellBottomMs, uint32_t dwellTopMs, int nDips);
 
     /**
      * @brief Reset the segment buffer ready for addSegment() calls.
@@ -219,12 +219,16 @@ private:
     uint8_t  _segCount;
     uint8_t  _segIndex;
 
+    // Jog state
+    bool _jogUp;             ///< Direction saved by jog() — used by resume() to restart a paused jog
+
     // Move tracking
-    float _targetMm;         ///< Absolute target for the current move (mm)
-    float _moveStartMm;      ///< Position recorded at the start of each move (mm)
-    float _profileStartMm;   ///< Position when runProfile() was called (mm)
-    float _movingSpeedMms;   ///< Speed saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s)
-    float _movingAccelMms2;  ///< Accel saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s²)
+    float    _targetMm;        ///< Absolute target for the current move (mm)
+    float    _moveStartMm;     ///< Position recorded at the start of each move (mm)
+    float    _profileStartMm;  ///< Position when runProfile() was called (mm)
+    float    _movingSpeedMms;  ///< Speed saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s)
+    float    _movingAccelMms2; ///< Accel saved by moveByMm() — used by resume() to restart a paused CMD MOVE (mm/s²)
+    uint32_t _moveStartMs;     ///< millis() recorded at the start of each move — used by isMoveComplete() settle guard
 
     // Dwell state
     uint32_t _dwellStartMs;

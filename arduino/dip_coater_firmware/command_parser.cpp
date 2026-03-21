@@ -265,6 +265,9 @@ void CommandParser::cmdJog(char* p) {
     float speed = nextFloat(p);
     if (speed <= 0.0f) { err("JOG", "bad_speed"); return; }
 
+    // Transition to RUNNING so that GET_STATE reflects the motor is moving,
+    // and so that PAUSE/STOP are accepted while the jog is active.
+    _sm.toRunning();
     _mc.jog(up, speed);
     ack("JOG");
 }
@@ -283,16 +286,17 @@ void CommandParser::cmdRunProfile(char* p) {
     long  dwellTop = nextLong(p);
     long  nDips    = nextLong(p);
 
-    // Validate: all physical parameters must be positive.
+    // Validate: motion parameters must be positive; dwell times must be >= 0.
     // An invalid profile transitions directly to ERROR to prevent a silent
     // bad-parameter run.
-    if (dipSpd <= 0 || wdrawSpd <= 0 || accel <= 0 || depth <= 0 || nDips <= 0) {
+    if (dipSpd <= 0 || wdrawSpd <= 0 || accel <= 0 || depth <= 0 || nDips <= 0
+            || dwellBot < 0 || dwellTop < 0) {
         err("RUN_PROFILE", "invalid_params");
         _sm.toError(ErrorCode::PROFILE_INVALID);
         return;
     }
     _mc.runProfile(dipSpd, wdrawSpd, accel, depth,
-                   (int)dwellBot, (int)dwellTop, (int)nDips);
+                   (uint32_t)dwellBot, (uint32_t)dwellTop, (int)nDips);
     ack("RUN_PROFILE");
 }
 

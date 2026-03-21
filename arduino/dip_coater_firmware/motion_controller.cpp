@@ -59,11 +59,13 @@ MotionController::MotionController(StateMachine& sm)
     , _currentDip         (1)
     , _segCount           (0)
     , _segIndex           (0)
+    , _jogUp              (false)
     , _targetMm           (0.0f)
     , _moveStartMm        (0.0f)
     , _profileStartMm     (0.0f)
     , _movingSpeedMms     (0.0f)
     , _movingAccelMms2    (0.0f)
+    , _moveStartMs        (0)
     , _dwellStartMs       (0)
     , _dwellDurationMs    (0)
     , _inDwell            (false)
@@ -155,11 +157,14 @@ void MotionController::stop() {
 
 void MotionController::estop() {
     // Hard-stop cuts power immediately — no deceleration ramp.
-    // Also clears the paused flag so a stale resume() can't restart motion.
+    // Also clears the paused flag so a stale resume() can't restart motion,
+    // and clears any in-progress limit-backoff so it doesn't restart next loop.
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
     _paused               = false;
+    _limitTriggered       = false;
+    _limitBackoffActive   = false;
     _sm.toError(ErrorCode::NONE);
     _stepper.stop(HARD);
 }
@@ -174,9 +179,12 @@ void MotionController::pause() {
 
     // Clear the active mode so update() stops running the profile,
     // then soft-stop the motor and enter PAUSED state.
-    _paused  = true;
-    _mode    = ProfileMode::NONE;
-    _inDwell = false;
+    // Also clear limit-backoff flags so the backoff is not re-entered on resume.
+    _paused             = true;
+    _mode               = ProfileMode::NONE;
+    _inDwell            = false;
+    _limitTriggered     = false;
+    _limitBackoffActive = false;
     _sm.toPaused();
     _stepper.stop(SOFT);
 }
@@ -217,10 +225,26 @@ void MotionController::resume() {
         // Restore the move's own accel before commanding the move.
         _accelMms2 = _movingAccelMms2;
         startMoveToMm(_targetMm, _movingSpeedMms);
+
+    } else if (_mode == ProfileMode::JOG) {
+        // Resume a paused jog: restart continuous motion in the same direction
+        // at the same speed.  _commandedVelocityMms and _jogUp were saved in jog().
+        setSpeed(_commandedVelocityMms);
+        _stepper.runContinous(_jogUp ? CW : CCW);
+
+    } else if (_mode == ProfileMode::LIMIT_BACKOFF) {
+        // A limit-backoff was interrupted by pause().  The backoff is a safety
+        // move — do not re-attempt it.  Instead, clear the mode and return to
+        // READY so the user can issue a fresh command.
+        _mode = ProfileMode::NONE;
+        _commandedVelocityMms = 0.0f;
+        _sm.toReady();   // overrides the toRunning() called above
     }
 }
 
 void MotionController::jog(bool up, float speedMms) {
+    // Save direction so resume() can restart the jog if it was paused.
+    _jogUp                = up;
     _mode                 = ProfileMode::JOG;
     _commandedVelocityMms = speedMms;
     _accelMms2            = DEFAULT_ACCEL_MM_S2;
@@ -248,17 +272,17 @@ void MotionController::moveByMm(float deltaMm, float speedMms, float accelMms2) 
     _accelMms2   = saved;
 }
 
-void MotionController::runProfile(float dipSpeedMms,    float withdrawSpeedMms,
-                                   float accelMms2,      float depthMm,
-                                   int   dwellBottomMs,  int   dwellTopMs,
-                                   int   nDips) {
+void MotionController::runProfile(float    dipSpeedMms,   float withdrawSpeedMms,
+                                   float    accelMms2,     float depthMm,
+                                   uint32_t dwellBottomMs, uint32_t dwellTopMs,
+                                   int      nDips) {
     // Store all profile parameters for use throughout the multi-dip sequence.
     _dipSpeedMms      = dipSpeedMms;
     _withdrawSpeedMms = withdrawSpeedMms;
     _accelMms2        = accelMms2;
     _depthMm          = depthMm;
-    _dwellBottomMs    = (uint32_t)dwellBottomMs;
-    _dwellTopMs       = (uint32_t)dwellTopMs;
+    _dwellBottomMs    = dwellBottomMs;
+    _dwellTopMs       = dwellTopMs;
     _nDips            = nDips;
     _currentDip       = 1;
 
@@ -374,8 +398,9 @@ void MotionController::startMoveToMm(float targetMm, float speedMms) {
     // checkSoftLimit() calls estop() and transitions to ERROR internally.
     if (!checkSoftLimit(targetMm)) return;
 
-    // Record start position for the isMoveComplete() distance guard.
+    // Record start position and time for the isMoveComplete() guards.
     _moveStartMm          = positionMm();
+    _moveStartMs          = millis();
     _targetMm             = targetMm;
     _commandedVelocityMms = speedMms;
     TR2F("startMoveToMm pos=", _moveStartMm, " target=", targetMm);
@@ -413,17 +438,19 @@ bool MotionController::isMoveComplete() {
 
     float pos      = positionMm();
     float travelMm = fabsf(_targetMm  - _moveStartMm);
-    float movedMm  = fabsf(pos        - _moveStartMm);
     float errorMm  = fabsf(pos        - _targetMm);
 
-    // Guard 1: Reject a spurious early STANDSTILL before the motor has covered
-    // half the commanded distance.  Brief glitches in the STANDSTILL flag can
-    // occur at the start of very slow moves before the ramp has fully built up.
-    if (travelMm > 0.5f && movedMm < travelMm * 0.5f) return false;
+    // Guard 1: Reject a spurious early STANDSTILL within the first 100 ms of
+    // motion.  Brief glitches in the STANDSTILL flag can occur at the start of
+    // any move (including short ones) before the ramp has fully built up.
+    // Using a time guard instead of a distance fraction covers all move lengths.
+    if ((millis() - _moveStartMs) < 100UL) return false;
 
     // Guard 2: Reject if the motor stopped far from the target.  This catches
     // cases where an unexpected endstop trigger halted the motor early —
     // without this guard the profile would advance to the next phase prematurely.
+    // Only applied for moves longer than 0.5 mm to avoid false failures on
+    // deliberate short nudges where a 3 mm error threshold is meaningless.
     if (travelMm > 0.5f && errorMm > 3.0f) return false;
 
     TR2F("isMoveComplete pos=", pos, " target=", _targetMm);
@@ -546,7 +573,9 @@ void MotionController::startCurrentSegment() {
         // Hold-position segment — no motion, just start the dwell timer.
         startDwell(seg.dwellMs);
     } else {
-        // Motion segment — apply this segment's own accel then command the move.
+        // Motion segment — ensure the dwell flag is clear before starting the
+        // move, so isMoveComplete() is not gated by a stale _inDwell value.
+        _inDwell     = false;
         _accelMms2   = seg.accelMms2;
         float target = getPositionMm() + seg.distMm;
         startMoveToMm(target, seg.speedMms);
