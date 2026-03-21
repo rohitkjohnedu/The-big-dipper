@@ -379,7 +379,8 @@ void CommandParser::cmdMoveSeg(char* p) {
 
     // When all expected segments have arrived, exit collection mode and
     // send ACK PROFILE_READY to tell the Python UI to issue RUN_LOADED_MOVE.
-    if (_segReceived >= _segTotal) {
+    // Use == rather than >= to make the exact-count intent explicit.
+    if (_segReceived == _segTotal) {
         _collectingSegs = false;
         ack("PROFILE_READY");
     }
@@ -403,7 +404,7 @@ void CommandParser::cmdDwellSeg(char* p) {
         return;
     }
     _segReceived++;
-    if (_segReceived >= _segTotal) {
+    if (_segReceived == _segTotal) {
         _collectingSegs = false;
         ack("PROFILE_READY");
     }
@@ -487,14 +488,16 @@ void CommandParser::dispatchDiag(char* line) {
 
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
         // Parse up to three optional arguments: distance, speed, accel.
-        // Fall back to the DIAG defaults if any argument is absent or zero.
+        // NaN means the argument was absent — substitute the default.
+        // An explicit 0 mm is forwarded as-is; startMoveTest() rejects it.
         char* p     = line + 9;
         float mm    = nextFloat(p);
         float speed = nextFloat(p);
         float accel = nextFloat(p);
-        _diag.startMoveTest(mm    != 0.0f ? mm    : 10.0f,
-                            speed >  0.0f ? speed : Diagnostics::DIAG_SPEED_MMS,
-                            accel >  0.0f ? accel : Diagnostics::DIAG_ACCEL_MMS2);
+        if (isnan(mm))    mm    = 10.0f;
+        if (!(speed > 0.0f)) speed = Diagnostics::DIAG_SPEED_MMS;
+        if (!(accel > 0.0f)) accel = Diagnostics::DIAG_ACCEL_MMS2;
+        _diag.startMoveTest(mm, speed, accel);
 
     } else if (strncmp(line, "DIAG CAL RESULT", 15) == 0) {
         // DIAG CAL RESULT must be checked before DIAG CAL because the shorter
@@ -506,8 +509,10 @@ void CommandParser::dispatchDiag(char* line) {
     } else if (strncmp(line, "DIAG CAL", 8) == 0) {
         char* p  = line + 8;
         float mm = nextFloat(p);
-        // Default to 50 mm if no distance was given.
-        _diag.startCalMove(mm != 0.0f ? mm : 50.0f);
+        // Default to 50 mm if no distance was given (NaN = no argument).
+        // An explicit 0 mm is forwarded as-is; startCalMove() rejects it.
+        if (isnan(mm)) mm = 50.0f;
+        _diag.startCalMove(mm);
 
     } else {
         Serial.print("ERR unknown_diag_command: ");

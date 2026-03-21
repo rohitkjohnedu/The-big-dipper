@@ -243,13 +243,15 @@ void MotionController::resume() {
     // Guard: only proceed if a valid pause snapshot exists.
     if (!_paused) return;
 
-    // Restore mode and state machine before re-issuing the motion command.
+    // Restore mode before re-issuing the motion command.
+    // toRunning() is called per-branch only for modes that actually resume
+    // motion — LIMIT_BACKOFF goes directly to READY without calling toRunning().
     _paused = false;
     _mode   = _pauseSnapshot.mode;
-    _sm.toRunning();
-    _sm.setPhase(_pauseSnapshot.phase);
 
     if (_mode == ProfileMode::TRAPEZOIDAL) {
+        _sm.toRunning();
+        _sm.setPhase(_pauseSnapshot.phase);
         // Restore the dip counter, then restart whichever phase was active.
         // For dwell phases, restart the dwell timer from zero (the remaining
         // dwell time is not tracked — the full dwell repeats on resume).
@@ -264,6 +266,8 @@ void MotionController::resume() {
         // Restore the segment index, then restart the current segment.
         // For MOVE segments the motor re-commands from the current position.
         // For DWELL segments the dwell timer restarts from zero.
+        _sm.toRunning();
+        _sm.setPhase(_pauseSnapshot.phase);
         _segIndex = _pauseSnapshot.segIndex;
         if (_segIndex < _segCount) {
             startCurrentSegment();
@@ -273,12 +277,16 @@ void MotionController::resume() {
         // Resume a paused CMD MOVE: re-command to the original absolute target.
         // _targetMm was set by the original moveByMm() call and is still valid.
         // Restore the move's own accel before commanding the move.
+        _sm.toRunning();
+        _sm.setPhase(_pauseSnapshot.phase);
         _accelMms2 = _movingAccelMms2;
         startMoveToMm(_targetMm, _movingSpeedMms);
 
     } else if (_mode == ProfileMode::JOG) {
         // Resume a paused jog: restart continuous motion in the same direction
         // at the same speed.  _commandedVelocityMms and _jogUp were saved in jog().
+        _sm.toRunning();
+        _sm.setPhase(_pauseSnapshot.phase);
         setSpeed(_commandedVelocityMms);
         _stepper.runContinous(_jogUp ? CW : CCW);
 
@@ -286,9 +294,10 @@ void MotionController::resume() {
         // A limit-backoff was interrupted by pause().  The backoff is a safety
         // move — do not re-attempt it.  Instead, clear the mode and return to
         // READY so the user can issue a fresh command.
+        // toRunning() is intentionally NOT called here — we go directly to READY.
         _mode = ProfileMode::NONE;
         _commandedVelocityMms = 0.0f;
-        _sm.toReady();   // overrides the toRunning() called above
+        _sm.toReady();
     }
 }
 
@@ -397,6 +406,14 @@ void MotionController::onEndstopTriggered(bool isTop) {
     // ---- Expected trigger: top endstop during homing -------------------------
     // Zero the encoder at this position and start the backoff move.
     // The backoff is a short downward move to release the endstop mechanism.
+    //
+    // NOTE: startMoveToMm() is called directly from this ISR.  On the STM32F103
+    // millis() may return a slightly stale value from inside an ISR (the SysTick
+    // counter is not re-read mid-interrupt on Cortex-M3).  This causes a small
+    // error in _moveStartMs — the 100 ms settle guard in isMoveComplete() may
+    // fire up to ~1 ms early, which is harmless for a slow homing backoff.
+    // The LIMIT_BACKOFF path defers startMoveToMm() to loop() because that
+    // path runs at arbitrary motor speeds where the timing risk is larger.
     if (_mode == ProfileMode::HOMING && isTop && !_homingBackoffActive) {
         _commandedVelocityMms = 0.0f;
         _stepper.stop(HARD);
@@ -617,6 +634,10 @@ void MotionController::updateTrapezoidal() {
 // =============================================================================
 
 void MotionController::startCurrentSegment() {
+    // Safety guard: _segIndex must always be valid before indexing _segments[].
+    // This should never fire in normal operation — it indicates a caller bug.
+    if (_segIndex >= _segCount) return;
+
     const Segment& seg = _segments[_segIndex];
     if (seg.type == Segment::Type::DWELL) {
         // Hold-position segment — no motion, just start the dwell timer.
@@ -642,6 +663,15 @@ void MotionController::startCurrentSegment() {
 // =============================================================================
 
 void MotionController::updateSegmented() {
+    // Safety guard: should not be reachable with an out-of-range index, but
+    // guard anyway to prevent undefined behaviour if state becomes inconsistent.
+    if (_segIndex >= _segCount) {
+        _mode = ProfileMode::NONE;
+        _commandedVelocityMms = 0.0f;
+        _sm.toReady();
+        return;
+    }
+
     const Segment& seg = _segments[_segIndex];
 
     // ---- Check for completion of the current segment ------------------------

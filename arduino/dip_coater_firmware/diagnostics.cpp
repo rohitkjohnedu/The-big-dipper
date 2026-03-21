@@ -9,7 +9,7 @@ Diagnostics::Diagnostics()
     : _mc(nullptr)
     , _sm(nullptr)
     , _mode(Mode::INACTIVE)
-    , _motorPhase(MotorPhase::JOG_DOWN)
+    , _motorPhase(MotorPhase::MOVE_DOWN)
     , _phaseStart(0)
     , _startPos(0.0f)
     , _passed(0)
@@ -115,6 +115,13 @@ void Diagnostics::printPosition() {
 }
 
 void Diagnostics::startMoveTest(float mm, float speedMms, float accelMms2) {
+    // Reject zero distance — a 0 mm move is meaningless and can confuse the
+    // completion detection logic (the motor never leaves its start position).
+    if (mm == 0.0f) {
+        Serial.println("ERR DIAG_MOVE bad_dist");
+        return;
+    }
+
     // Store all parameters before calling moveByMm() so they are available
     // to updateMoveTest() even if moveByMm() triggers an immediate ERROR.
     _moveTestDeltaMm   = mm;
@@ -374,6 +381,12 @@ void Diagnostics::updateMoveTest() {
 // =============================================================================
 
 void Diagnostics::startCalMove(float mm) {
+    // Reject zero distance — a 0 mm calibration move produces no useful data.
+    if (mm == 0.0f) {
+        Serial.println("ERR DIAG_CAL bad_dist");
+        return;
+    }
+
     // Seed calibration state and start the move at the faster CAL_SPEED_MMS.
     _calCommandedMm = mm;
     _calStartPos    = _mc->getPositionMm();
