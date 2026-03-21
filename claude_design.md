@@ -269,7 +269,7 @@ Threading model — three threads
 
 Serial thread: reads incoming lines, parses TELEM and ACK/ERR, puts onto queues. Never touches UI.
 Data thread: consumes telemetry queue, appends to numpy arrays, triggers UI refresh, writes to log file.
-Main/UI thread: PyQt5 event loop only. Reads from queues via signals/slots. Never blocks.
+Main/UI thread: PyQt6 event loop only. Reads from queues via signals/slots. Never blocks.
 
 core/serial_manager.py
 
@@ -402,7 +402,7 @@ Stub exists so imports never break and velocity_profile_type = "spline" is alrea
 
 
 UI Architecture
-Framework: PyQt5 with pyqtgraph
+Framework: PyQt6 with pyqtgraph
 main_window.py
 
 Top-level QMainWindow
@@ -504,7 +504,7 @@ requires-python = ">=3.11"
 
 dependencies = [
     "pyserial",
-    "PyQt5",
+    "PyQt6",
     "pyqtgraph",
     "numpy",
     "scipy",
@@ -526,7 +526,7 @@ uv run pytest            # run tests
 ## Coding Rules
 
 1. **No `delay()` anywhere in the Arduino firmware.** All timing via `millis()`.
-2. **Serial thread never touches PyQt5 widgets.** Only signals/slots cross thread boundaries.
+2. **Serial thread never touches PyQt6 widgets.** Only signals/slots cross thread boundaries.
 3. **Unit conversion happens only on the Arduino.** Wire always speaks mm. Python never converts units.
 4. **Every command gets an ACK or ERR.** No silent failures.
 5. **E-stop bypasses all queues** — sent immediately and directly.
