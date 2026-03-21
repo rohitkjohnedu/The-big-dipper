@@ -54,6 +54,7 @@ block briefly while awaiting the ACK, which is acceptable for a desktop GUI.
 
 import logging
 import queue
+import time
 from typing import Any, Final
 
 from core.profile import DipProfile
@@ -68,7 +69,28 @@ log: Final[logging.Logger] = logging.getLogger(__name__)
 
 # Maximum number of segments the Arduino firmware can buffer before execution.
 # Mirrors MOVE_SEG_BUFFER_SIZE in arduino/dip_coater_firmware/config.h.
+# NOTE: This is a *logical* limit (RAM slots in the motion controller).  It is
+# separate from the *physical* serial RX buffer limit described below.
 MOVE_SEG_BUFFER_SIZE: Final[int] = 64
+
+# Minimum delay inserted between consecutive MOVE_SEG / DWELL_SEG sends.
+#
+# Background — two independent limits govern segmented moves:
+#
+#   1. Logical limit  (MOVE_SEG_BUFFER_SIZE = 64): how many segments the
+#      Arduino's motion controller can hold in RAM.
+#
+#   2. Physical limit (serial RX buffer): the UART hardware buffer is
+#      typically 64–256 bytes.  At 115200 baud a 35-char MOVE_SEG line takes
+#      ~3 ms.  If Python sends all segments back-to-back without a gap,
+#      commands arrive faster than loop() drains the buffer and bytes are
+#      silently dropped — the Arduino never receives the full segment count
+#      and never sends ACK PROFILE_READY.
+#
+# A 10 ms inter-segment pause allows loop() to fully parse and store each
+# command before the next one arrives.  Overhead: 64 segments × 10 ms = 640 ms
+# of loading time, which is negligible compared to real move durations.
+INTER_SEGMENT_DELAY_S: Final[float] = 0.010
 
 # Default seconds to wait for an ACK before raising CommandError.
 DEFAULT_ACK_TIMEOUT_S: Final[float] = 5.0
@@ -377,8 +399,13 @@ class CommandInterface:
                 The Arduino firmware enforces a maximum of 50 Hz.
 
         Raises:
+            ValueError:   If ``hz`` is negative or exceeds 50 Hz.
             CommandError: On ERR or timeout.
         """
+        if hz < 0 or hz > 50:
+            raise ValueError(
+                f"Telemetry rate must be 0–50 Hz, got {hz}"
+            )
         self._mgr.send_command(f"CMD SET_TELEM_RATE {hz}")
         self._wait_ack("SET_TELEM_RATE")
 
@@ -387,15 +414,26 @@ class CommandInterface:
         Set soft travel limits and await ``ACK SET_SOFT_LIMITS``.
 
         The Arduino enforces ``min_mm < max_mm`` and rejects the command if
-        the constraint is violated.
+        the constraint is violated.  Python validates the same constraint
+        before sending to avoid a wasted round-trip.
 
         Args:
             min_mm: Lower travel limit in mm.  Must be less than ``max_mm``.
             max_mm: Upper travel limit in mm.
 
         Raises:
-            CommandError: On ERR (e.g. ``min >= max``) or timeout.
+            ValueError:   If ``min_mm >= max_mm`` or either value is non-finite.
+            CommandError: On ERR or timeout.
         """
+        import math
+        if not math.isfinite(min_mm) or not math.isfinite(max_mm):
+            raise ValueError(
+                f"Soft limits must be finite, got min={min_mm!r} max={max_mm!r}"
+            )
+        if min_mm >= max_mm:
+            raise ValueError(
+                f"min_mm ({min_mm}) must be less than max_mm ({max_mm})"
+            )
         self._mgr.send_command(
             f"CMD SET_SOFT_LIMITS {min_mm:.4f} {max_mm:.4f}"
         )
@@ -484,6 +522,8 @@ class CommandInterface:
 
         # --- Step 2: stream every segment ------------------------------------
         # The Arduino counts received segments internally; no ACK per segment.
+        # INTER_SEGMENT_DELAY_S is inserted after each send to prevent the
+        # serial RX buffer from overflowing before loop() drains it.
         seg: dict[str, Any]
         for seg in segments:
             seg_type: str = str(seg.get("type", ""))
@@ -516,6 +556,10 @@ class CommandInterface:
                     f"Unknown segment type {seg_type!r} at index "
                     f"{segments.index(seg)}"
                 )
+
+            # Pause to let the Arduino's loop() drain the RX buffer before
+            # the next command arrives (see INTER_SEGMENT_DELAY_S comment).
+            time.sleep(INTER_SEGMENT_DELAY_S)
 
         # --- Step 3: wait for PROFILE_READY (sent after the final segment) ---
         self._wait_ack("PROFILE_READY")

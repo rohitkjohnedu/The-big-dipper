@@ -353,11 +353,20 @@ class TestSetSoftLimits:
         assert fake.sent[0] == "CMD SET_SOFT_LIMITS -5.0000 200.0000"
 
     def test_raises_on_err(self) -> None:
-        """set_soft_limits must raise CommandError if Arduino replies ERR."""
+        """set_soft_limits raises CommandError if Arduino replies ERR."""
+        # Use valid limits so Python validation passes; the ERR simulates
+        # an Arduino-side rejection (e.g. limit outside travel range).
         fake: _FakeManager = _FakeManager()
-        fake.response_queue.put("ERR SET_SOFT_LIMITS min_must_be_less_than_max")
+        fake.response_queue.put("ERR SET_SOFT_LIMITS out_of_range")
         with pytest.raises(CommandError):
+            make_ci(fake).set_soft_limits(-5.0, 100.0)
+
+    def test_raises_value_error_when_min_ge_max(self) -> None:
+        """set_soft_limits raises ValueError before sending if min >= max."""
+        fake: _FakeManager = _FakeManager()
+        with pytest.raises(ValueError, match="min_mm"):
             make_ci(fake).set_soft_limits(100.0, -5.0)
+        assert len(fake.sent) == 0  # nothing was sent to the Arduino
 
 
 # ---------------------------------------------------------------------------

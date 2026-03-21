@@ -36,11 +36,15 @@ from typing import Final
 
 import pytest
 
+import numpy as np
+
 from core.command_interface import CommandInterface, CommandError
 from core.data_recorder import DataRecorder, Float64Array, RecordedRun
 from core.profile import DipProfile
 from core.serial_manager import SerialManager
 from core.telemetry_parser import TelemetryFrame
+from motion.trapezoidal_profile import TrapezoidalProfile
+from motion.velocity_profile import MoveSegment
 from tests.conftest import (
     hw_flush_queue,
     hw_wait_for_state_transition,
@@ -498,4 +502,237 @@ class TestSegmentedRun:
         assert vel_range > 5.0, (
             f"Velocity range {vel_range:.2f} mm/s — expected > 5.0 mm/s for "
             "variable-speed segmented profile"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — TrapezoidalProfile against hardware
+# ---------------------------------------------------------------------------
+
+@pytest.mark.hardware
+class TestTrapezoidalProfileHardware:
+    """Validate TrapezoidalProfile kinematics against real motor telemetry.
+
+    These tests construct a :class:`~motion.trapezoidal_profile.TrapezoidalProfile`,
+    run it on the Arduino, and compare the recorded telemetry to the
+    analytically predicted values.  They also verify the segment-streaming
+    path (``to_segments()`` → ``BEGIN_SEGMENTED_MOVE``) produces the same
+    motion as the direct ``CMD RUN_PROFILE`` shortcut.
+    """
+
+    # Profile used across the class — slow enough to be safe, fast enough
+    # to produce clear velocity data.
+    _SPEED:  float = 8.0    # mm/s
+    _ACCEL:  float = 30.0   # mm/s²
+    _DIST:   float = 20.0   # mm
+
+    def _home_and_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """Home the Arduino and block until READY.  Fails the test on timeout."""
+        hw_ci.home()
+        hw_flush_queue(hw_manager)
+        reached: bool = hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=60.0,
+        )
+        assert reached, "Could not reach READY before test"
+
+    def _run_profile_and_record(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        profile: DipProfile,
+        log_dir: str,
+    ) -> RecordedRun:
+        """Run *profile*, record all telemetry, and return the completed RecordedRun."""
+        recorder: DataRecorder = DataRecorder(log_dir=log_dir)
+        recorder.start(profile.name)
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=120.0,
+            recorder=recorder,
+        )
+        return recorder.finish()
+
+    # ------------------------------------------------------------------
+    # Buffer / analytical checks (no hardware motion needed)
+    # ------------------------------------------------------------------
+
+    def test_profile_buffer_check(self) -> None:
+        """Profile with 1 mm segments fits in the 64-segment Arduino buffer."""
+        p: TrapezoidalProfile = TrapezoidalProfile(
+            target_speed_mm_s = self._SPEED,
+            accel_mm_s2       = self._ACCEL,
+            distance_mm       = -self._DIST,
+        )
+        assert p.fits_in_arduino_buffer(segment_length_mm=1.0), (
+            f"Profile produces {p.segment_count(1.0)} segments — exceeds buffer of 64"
+        )
+
+    def test_segment_distances_sum_to_profile_distance(self) -> None:
+        """to_segments() distances sum exactly to the total profile distance."""
+        p: TrapezoidalProfile = TrapezoidalProfile(
+            target_speed_mm_s = self._SPEED,
+            accel_mm_s2       = self._ACCEL,
+            distance_mm       = -self._DIST,
+        )
+        segs: list[MoveSegment] = p.to_segments(1.0)
+        total: float          = sum(abs(s.distance_mm) for s in segs)
+        expected_dist: float  = self._DIST
+        assert total == pytest.approx(expected_dist, rel=1e-6)
+
+    # ------------------------------------------------------------------
+    # Hardware motion tests
+    # ------------------------------------------------------------------
+
+    def test_run_profile_shortcut_peak_velocity(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Peak recorded velocity is within 20 % of target speed during RUN_PROFILE.
+
+        Uses the CMD RUN_PROFILE shortcut (Arduino computes motion natively).
+        A 20 % tolerance accounts for the discrete 10 Hz telemetry sampling
+        potentially missing the exact cruise peak.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        profile: DipProfile = DipProfile(
+            name                = "hw_trap_shortcut",
+            dip_speed_mm_s      = self._SPEED,
+            withdraw_speed_mm_s = self._SPEED,
+            accel_mm_s2         = self._ACCEL,
+            dip_depth_mm        = self._DIST,
+            dwell_bottom_ms     = 500,
+            dwell_top_ms        = 0,
+            n_dips              = 1,
+            velocity_profile_type = "trapezoidal",
+        )
+        run: RecordedRun = self._run_profile_and_record(
+            hw_manager, hw_ci, profile, str(tmp_path)
+        )
+
+        vel: Float64Array   = run.arrays["vel_actual_mm_s"]
+        peak_vel: float     = float(np.abs(vel).max())
+        tolerance: float    = 0.20 * self._SPEED
+
+        assert peak_vel > 0.0, "No velocity recorded — motor may not have moved"
+        assert abs(peak_vel - self._SPEED) < tolerance, (
+            f"Peak velocity {peak_vel:.2f} mm/s is not within 20 % of "
+            f"target {self._SPEED} mm/s"
+        )
+
+    def test_run_via_segments_reaches_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Streaming to_segments() via BEGIN_SEGMENTED_MOVE completes successfully.
+
+        Converts a TrapezoidalProfile to MoveSegments, wraps them in a
+        segmented DipProfile, and runs via the segmented command path.
+        Verifies the Arduino returns to READY.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        p: TrapezoidalProfile = TrapezoidalProfile(
+            target_speed_mm_s = self._SPEED,
+            accel_mm_s2       = self._ACCEL,
+            distance_mm       = -self._DIST,
+        )
+        # 1 mm segments → ~20 commands for a 20 mm move.  The inter-segment
+        # delay in _run_segmented() prevents RX buffer overflow.
+        segs: list[MoveSegment] = p.to_segments(segment_length_mm=1.0)
+        seg_dicts: list[dict[str, object]] = [
+            {
+                "type":        "move",
+                "distance_mm": float(s.distance_mm),
+                "speed_mm_s":  float(s.speed_mm_s),
+                "accel_mm_s2": float(s.accel_mm_s2),
+            }
+            for s in segs
+        ]
+
+        profile: DipProfile = DipProfile(
+            name                  = "hw_trap_streamed",
+            dip_speed_mm_s        = self._SPEED,
+            withdraw_speed_mm_s   = self._SPEED,
+            accel_mm_s2           = self._ACCEL,
+            dip_depth_mm          = self._DIST,
+            dwell_bottom_ms       = 0,
+            dwell_top_ms          = 0,
+            n_dips                = 1,
+            velocity_profile_type = "segmented",
+            velocity_profile_data = {"segments": seg_dicts},
+        )
+
+        run: RecordedRun = self._run_profile_and_record(
+            hw_manager, hw_ci, profile, str(tmp_path)
+        )
+        assert run.frame_count > 0, "No telemetry recorded during streamed run"
+
+    def test_duration_within_tolerance(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Measured run duration is within 30 % of the analytically predicted value.
+
+        30 % tolerance accounts for dwell time, Arduino scheduling jitter,
+        and 10 Hz telemetry resolution.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        # RUN_PROFILE executes a full dip cycle: descent + dwell_bottom +
+        # ascent + dwell_top.  Predict the duration for both legs separately.
+        descent: TrapezoidalProfile = TrapezoidalProfile(
+            target_speed_mm_s = self._SPEED,
+            accel_mm_s2       = self._ACCEL,
+            distance_mm       = -self._DIST,
+        )
+        ascent: TrapezoidalProfile = TrapezoidalProfile(
+            target_speed_mm_s = self._SPEED,
+            accel_mm_s2       = self._ACCEL,
+            distance_mm       = self._DIST,
+        )
+        dwell_bottom_s: float = 0.0
+        dwell_top_s:    float = 0.0
+        predicted_s:    float = (
+            descent.total_duration()
+            + dwell_bottom_s
+            + ascent.total_duration()
+            + dwell_top_s
+        )
+
+        profile: DipProfile = DipProfile(
+            name                = "hw_trap_duration",
+            dip_speed_mm_s      = self._SPEED,
+            withdraw_speed_mm_s = self._SPEED,
+            accel_mm_s2         = self._ACCEL,
+            dip_depth_mm        = self._DIST,
+            dwell_bottom_ms     = 0,
+            dwell_top_ms        = 0,
+            n_dips              = 1,
+            velocity_profile_type = "trapezoidal",
+        )
+
+        t_start: float   = time.monotonic()
+        self._run_profile_and_record(hw_manager, hw_ci, profile, str(tmp_path))
+        measured_s: float = time.monotonic() - t_start
+
+        # 30 % tolerance covers serial latency, state-detection overhead,
+        # and Arduino scheduling jitter on top of the pure motion time.
+        tolerance: float = 0.30 * predicted_s
+        assert abs(measured_s - predicted_s) < tolerance, (
+            f"Measured duration {measured_s:.2f} s deviates from predicted "
+            f"{predicted_s:.2f} s by more than 30 %"
         )

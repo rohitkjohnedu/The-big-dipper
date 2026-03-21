@@ -320,11 +320,23 @@ class DataRecorder:
             A :class:`RecordedRun` containing trimmed arrays and the CSV
             path (or ``None`` if ``save=False`` or the run had 0 frames).
 
+        Raises:
+            RuntimeError: If called when no run is in progress (i.e.
+                :meth:`start` was never called or :meth:`finish` was already
+                called for the current run).
+
         Note:
             After :meth:`finish` returns, :attr:`is_recording` is ``False``
             and :attr:`frame_count` is ``0``.  The returned
             :class:`RecordedRun` owns its own copies of the arrays.
         """
+        # Guard against double-finish or finish-without-start.
+        if not self._profile_name:
+            raise RuntimeError(
+                "DataRecorder.finish() called with no run in progress. "
+                "Call start() first."
+            )
+
         # --- Trim arrays to actual frame count --------------------------------
         n: int = self._count
         trimmed: dict[str, Float64Array] = {

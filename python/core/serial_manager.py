@@ -112,9 +112,13 @@ class SerialManager:
         self._write_lock: threading.Lock = threading.Lock()
 
         # --- Public queues ---------------------------------------------------
-        # Unbounded queues — the consumer (UI) is expected to drain them promptly.
-        self.telem_queue:    queue.Queue[TelemetryFrame] = queue.Queue()
-        self.response_queue: queue.Queue[str]            = queue.Queue()
+        # Bounded to prevent unbounded memory growth if the consumer (UI)
+        # falls behind.  1000 telemetry frames at 50 Hz = 20 s of backlog
+        # before frames are dropped — more than enough for any UI lag.
+        # response_queue is capped at 200: commands are always ACK'd promptly
+        # so a large backlog here indicates a protocol error.
+        self.telem_queue:    queue.Queue[TelemetryFrame] = queue.Queue(maxsize=1000)
+        self.response_queue: queue.Queue[str]            = queue.Queue(maxsize=200)
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -207,11 +211,10 @@ class SerialManager:
             cmd: Command string to send, e.g. ``"CMD HOME"`` or
                  ``"CMD JOG UP 10.0000"``.  Must be ASCII-encodable.
 
-        Note:
-            If the serial port is not open (i.e. ``start()`` has not been
-            called or ``stop()`` has already been called), the command is
-            dropped and a warning is logged.  No exception is raised to
-            avoid crashing the UI on a disconnection event.
+        Raises:
+            RuntimeError: If the serial port is not open (``start()`` not
+                called, or ``stop()`` already called).  Callers must not
+                silently swallow this — a dropped command is always a bug.
         """
         # Ensure the line is newline-terminated before encoding.
         if not cmd.endswith("\n"):
@@ -228,8 +231,9 @@ class SerialManager:
                     # on its next readline() call and exit cleanly.
                     log.error("send_command(%r) failed: %s", cmd.rstrip(), exc)
             else:
-                log.warning(
-                    "send_command(%r) dropped — serial port is not open", cmd.rstrip()
+                raise RuntimeError(
+                    f"send_command({cmd.rstrip()!r}) failed — serial port is not open. "
+                    "Call start() before sending commands."
                 )
 
     # -------------------------------------------------------------------------

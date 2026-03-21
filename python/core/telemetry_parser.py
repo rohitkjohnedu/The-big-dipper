@@ -100,6 +100,42 @@ class TelemetryFrame:
 
 
 # ---------------------------------------------------------------------------
+# Drop counter
+# ---------------------------------------------------------------------------
+
+# Module-level counter of TELEM lines that failed validation.  Use a
+# single-element list so it is mutable from inside the module-level parse()
+# function without needing `global`.  Read via dropped_frame_count().
+_dropped: list[int] = [0]
+
+
+def dropped_frame_count() -> int:
+    """Return the total number of TELEM lines dropped since process start.
+
+    A line is counted as dropped when it starts with ``TELEM,`` but fails
+    any validation step (wrong field count, non-numeric value, non-finite
+    float, unknown state/phase).  Non-TELEM lines (ACK, ERR, etc.) are
+    not counted — they are handled by a different subsystem.
+
+    This counter is never reset automatically.  Use it to detect serial
+    corruption: a non-zero value during a run warrants investigation.
+
+    Returns:
+        int: Cumulative count of dropped TELEM frames.
+    """
+    return _dropped[0]
+
+
+def reset_dropped_frame_count() -> None:
+    """Reset the dropped-frame counter to zero.
+
+    Call at the start of each run if you want per-run drop counts rather
+    than a cumulative total.
+    """
+    _dropped[0] = 0
+
+
+# ---------------------------------------------------------------------------
 # Public parsing function
 # ---------------------------------------------------------------------------
 
@@ -157,6 +193,7 @@ def parse(line: str) -> TelemetryFrame | None:
             "telemetry_parser: expected %d fields, got %d in %r",
             _EXPECTED_FIELD_COUNT, len(parts), line,
         )
+        _dropped[0] += 1
         return None
 
     # --- Step 4: convert numeric fields --------------------------------------
@@ -169,6 +206,7 @@ def parse(line: str) -> TelemetryFrame | None:
         accel_mm_s2:        float = float(parts[5])
     except ValueError as exc:
         log.warning("telemetry_parser: numeric conversion error in %r: %s", line, exc)
+        _dropped[0] += 1
         return None
 
     # Reject non-finite float values (inf, -inf, nan).  The Arduino never
@@ -176,6 +214,7 @@ def parse(line: str) -> TelemetryFrame | None:
     _floats: list[float] = [pos_mm, vel_actual_mm_s, vel_commanded_mm_s, accel_mm_s2]
     if any(not math.isfinite(v) for v in _floats):
         log.warning("telemetry_parser: non-finite float value in %r", line)
+        _dropped[0] += 1
         return None
 
     # --- Step 5: validate string enumeration fields --------------------------
@@ -184,10 +223,12 @@ def parse(line: str) -> TelemetryFrame | None:
 
     if state not in _VALID_STATES:
         log.warning("telemetry_parser: unknown state %r in %r", state, line)
+        _dropped[0] += 1
         return None
 
     if phase not in _VALID_PHASES:
         log.warning("telemetry_parser: unknown phase %r in %r", phase, line)
+        _dropped[0] += 1
         return None
 
     # --- All checks passed — construct and return the frame ------------------
