@@ -98,11 +98,11 @@ void Diagnostics::startEndstopTest() {
     _lastBot = digitalRead(PIN_ENDSTOP_BOTTOM) == LOW;
 }
 
-void Diagnostics::startJog(bool up, float speedMms) {
+void Diagnostics::startJog(bool up, float speedMms, float accelMms2) {
     // Delegate the continuous velocity move to MotionController.
     // In JOG mode, update() does nothing — the motor runs until exit() is called.
     _mode = Mode::JOG;
-    _mc->jog(up, speedMms);
+    _mc->jog(up, speedMms, accelMms2);
 
     Serial.print("DIAG:JOG:");
     Serial.print(up ? "UP:" : "DOWN:");

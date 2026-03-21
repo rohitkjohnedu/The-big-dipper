@@ -279,12 +279,15 @@ void CommandParser::cmdJog(char* p) {
     else { err("JOG", "bad_args"); return; }
 
     float speed = nextFloat(p);
-    if (speed <= 0.0f) { err("JOG", "bad_speed"); return; }
+    if (!(speed > 0.0f)) { err("JOG", "bad_speed"); return; }
+
+    float accel = nextFloat(p);
+    if (!(accel > 0.0f)) accel = DEFAULT_ACCEL_MM_S2;
 
     // Transition to RUNNING so that GET_STATE reflects the motor is moving,
     // and so that PAUSE/STOP are accepted while the jog is active.
     _sm.toRunning();
-    _mc.jog(up, speed);
+    _mc.jog(up, speed, accel);
     ack("JOG");
 }
 
@@ -469,13 +472,18 @@ void CommandParser::dispatchDiag(char* line) {
     else if (strncmp(line, "DIAG JOG DOWN", 13) == 0) {
         char* p   = line + 13;
         float spd = nextFloat(p);
-        // Default to 5 mm/s if no speed was supplied.
-        _diag.startJog(false, spd > 0.0f ? spd : 5.0f);
+        float acc = nextFloat(p);
+        _diag.startJog(false,
+                       spd > 0.0f ? spd : 5.0f,
+                       acc > 0.0f ? acc : DEFAULT_ACCEL_MM_S2);
 
     } else if (strncmp(line, "DIAG JOG UP", 11) == 0) {
         char* p   = line + 11;
         float spd = nextFloat(p);
-        _diag.startJog(true, spd > 0.0f ? spd : 5.0f);
+        float acc = nextFloat(p);
+        _diag.startJog(true,
+                       spd > 0.0f ? spd : 5.0f,
+                       acc > 0.0f ? acc : DEFAULT_ACCEL_MM_S2);
 
     } else if (strncmp(line, "DIAG MOVE", 9) == 0) {
         // Parse up to three optional arguments: distance, speed, accel.
@@ -520,7 +528,7 @@ void CommandParser::printHelp() {
     Serial.println("  CMD PAUSE");
     Serial.println("  CMD RESUME");
     Serial.println("  CMD MOVE <dist_mm> [speed_mm_s] [accel_mm_s2]");
-    Serial.println("  CMD JOG <UP|DOWN> <speed_mm_s>");
+    Serial.println("  CMD JOG <UP|DOWN> <speed_mm_s> [accel_mm_s2]");
     Serial.println("  CMD RUN_PROFILE <dip_spd> <wdraw_spd> <accel> <depth_mm> <dwell_bot_ms> <dwell_top_ms> <n_dips>");
     Serial.println("  CMD BEGIN_SEGMENTED_MOVE <n_segs>");
     Serial.println("  CMD MOVE_SEG  <dist_mm> <speed_mm_s> [accel_mm_s2]  (counts toward n_segs)");
@@ -533,8 +541,8 @@ void CommandParser::printHelp() {
     Serial.println("  DIAG MOTORENCODER       same + encoder pass/fail check");
     Serial.println("  DIAG ENDSTOP            live endstop monitor (trigger manually)");
     Serial.println("  DIAG MOVE <mm> [spd] [acc]");
-    Serial.println("  DIAG JOG DOWN [spd]     continuous jog down");
-    Serial.println("  DIAG JOG UP   [spd]     continuous jog up");
+    Serial.println("  DIAG JOG DOWN [spd] [acc]  continuous jog down");
+    Serial.println("  DIAG JOG UP   [spd] [acc]  continuous jog up");
     Serial.println("  DIAG JOG STOP");
     Serial.println("  DIAG POS                print current position mm");
     Serial.println("  DIAG CAL <mm>           calibration move");

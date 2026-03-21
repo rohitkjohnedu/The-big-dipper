@@ -12,6 +12,20 @@ float MotionController::mmToDeg(float mm) const {
     return mm * (360.0f / LEADSCREW_MM_PER_REV);
 }
 
+/**
+ * @brief Convert linear speed or acceleration (mm/s or mm/s²) to full steps/s or full steps/s².
+ *
+ * setMaxVelocity() and setMaxAcceleration() in the uStepperS32 library take
+ * full steps per second — NOT degrees per second.  The conversion is:
+ *   full_steps/s = mm/s × (MOTOR_STEPS_PER_REV / LEADSCREW_MM_PER_REV)
+ *               = mm/s × 25   (200 steps/rev ÷ 8 mm/rev)
+ *
+ * Using mmToDeg() here (×45 instead of ×25) causes a 1.8× velocity overshoot.
+ */
+float MotionController::mmToStepsRate(float mmPerSec) const {
+    return mmPerSec * (MOTOR_STEPS_PER_REV / LEADSCREW_MM_PER_REV);
+}
+
 /** @brief Return current encoder position in mm relative to home. */
 float MotionController::positionMm() {
     // angleMoved() returns cumulative shaft rotation in degrees since setHome().
@@ -34,9 +48,9 @@ float MotionController::actualVelocityMms() {
  * the same value (_accelMms2) to produce symmetric trapezoidal ramps.
  */
 void MotionController::setSpeed(float speedMms) {
-    _stepper.setMaxVelocity(    mmToDeg(speedMms)   );
-    _stepper.setMaxAcceleration(mmToDeg(_accelMms2) );
-    _stepper.setMaxDeceleration(mmToDeg(_accelMms2) );
+    _stepper.setMaxVelocity(    mmToStepsRate(speedMms)   );
+    _stepper.setMaxAcceleration(mmToStepsRate(_accelMms2) );
+    _stepper.setMaxDeceleration(mmToStepsRate(_accelMms2) );
 }
 
 // =============================================================================
@@ -134,9 +148,9 @@ void MotionController::executeHome() {
     // so StealthChop stays active — runContinuous forces SpreadCycle regardless
     // of TPWMTHRS.  Command more than the maximum travel distance upward; the
     // top-endstop ISR will hard-stop and zero the encoder when it fires.
-    _stepper.setMaxVelocity(    mmToDeg(HOMING_SPEED_MM_S)  );
-    _stepper.setMaxAcceleration(mmToDeg(HOMING_ACC_MM_S2)   );
-    _stepper.setMaxDeceleration(mmToDeg(HOMING_ACC_MM_S2)   );
+    _stepper.setMaxVelocity(    mmToStepsRate(HOMING_SPEED_MM_S)  );
+    _stepper.setMaxAcceleration(mmToStepsRate(HOMING_ACC_MM_S2)   );
+    _stepper.setMaxDeceleration(mmToStepsRate(HOMING_ACC_MM_S2)   );
     _stepper.moveAngle(mmToDeg(TRAVEL_MAX_MM));
 }
 
@@ -242,12 +256,12 @@ void MotionController::resume() {
     }
 }
 
-void MotionController::jog(bool up, float speedMms) {
-    // Save direction so resume() can restart the jog if it was paused.
+void MotionController::jog(bool up, float speedMms, float accelMms2) {
+    // Save direction and accel so resume() can restart the jog if it was paused.
     _jogUp                = up;
     _mode                 = ProfileMode::JOG;
     _commandedVelocityMms = speedMms;
-    _accelMms2            = DEFAULT_ACCEL_MM_S2;
+    _accelMms2            = accelMms2;
     setSpeed(speedMms);
     // runContinous drives the motor indefinitely in the given direction.
     // CW = upward (toward home), CCW = downward — matches the coordinate system.

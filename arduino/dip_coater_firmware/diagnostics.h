@@ -54,10 +54,11 @@ public:
 
     /**
      * @brief Start a continuous velocity jog.
-     * @param up       true = upward, false = downward.
-     * @param speedMms Jog speed (mm/s).
+     * @param up        true = upward, false = downward.
+     * @param speedMms  Jog speed (mm/s).
+     * @param accelMms2 Acceleration (mm/s²).  Defaults to DEFAULT_ACCEL_MM_S2.
      */
-    void startJog(bool up, float speedMms);
+    void startJog(bool up, float speedMms, float accelMms2 = DEFAULT_ACCEL_MM_S2);
 
     /**
      * @brief Command a single move and report PASS/FAIL against TOLERANCE_MM.

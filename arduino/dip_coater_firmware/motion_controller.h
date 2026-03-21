@@ -72,7 +72,7 @@ public:
      * @param up       true = upward, false = downward.
      * @param speedMms Jog speed (mm/s).
      */
-    void jog(bool up, float speedMms);
+    void jog(bool up, float speedMms, float accelMms2 = DEFAULT_ACCEL_MM_S2);
 
     /**
      * @brief Start a trapezoidal dip profile.
@@ -251,8 +251,15 @@ private:
     // Private helpers
     // -------------------------------------------------------------------------
 
-    /** @brief Unit conversion: mm → degrees of motor rotation. */
+    /** @brief Unit conversion: mm → degrees of motor rotation (for position commands). */
     float mmToDeg(float mm) const;
+
+    /**
+     * @brief Unit conversion: mm/s or mm/s² → full steps/s or full steps/s².
+     *        Used for setMaxVelocity() / setMaxAcceleration() which take full steps/s,
+     *        NOT degrees/s.  Using mmToDeg() here would cause a 1.8× velocity error.
+     */
+    float mmToStepsRate(float mmPerSec) const;
 
     /** @brief Set stepper max velocity and acceleration from current _accelMms2. */
     void  setSpeed(float speedMms);
