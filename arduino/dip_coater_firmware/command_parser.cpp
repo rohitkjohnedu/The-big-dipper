@@ -15,6 +15,7 @@ static float nextFloat(char*& p) {
     while (*p == ' ') p++;     // skip leading whitespace
     char* end;
     float v = strtof(p, &end);
+    if (end == p) return NAN;  // nothing was parsed — no digits at current position
     p = end;                   // advance past the parsed token
     return v;
 }
@@ -38,6 +39,7 @@ CommandParser::CommandParser(StateMachine& sm, MotionController& mc, Diagnostics
     , _diag(diag)
     , _telem(nullptr)
     , _len(0)
+    , _bufOverflow(false)
     , _telemRateHz(DEFAULT_TELEM_RATE_HZ)
     , _collectingSegs(false)
     , _segTotal(0)
@@ -69,14 +71,23 @@ void CommandParser::update() {
             _buf[_len] = '\0';
             if (_len > 0 && _buf[_len - 1] == '\r') _buf[--_len] = '\0';
 
-            // Dispatch non-empty lines; ignore blank lines.
-            if (_len > 0) dispatch(_buf);
+            if (_bufOverflow) {
+                // The line was longer than SERIAL_BUFFER_SIZE — the buffer holds
+                // only a truncated prefix, which would parse incorrectly.
+                // Report the error and discard the whole line.
+                Serial.println("ERR CMD line_too_long");
+                _bufOverflow = false;
+            } else if (_len > 0) {
+                dispatch(_buf);
+            }
             _len = 0;
 
         } else if (_len < (uint8_t)(sizeof(_buf) - 1)) {
             // Normal character — append to buffer.
-            // Characters beyond buffer size are silently dropped to prevent overflow.
             _buf[_len++] = c;
+        } else {
+            // Buffer full — mark overflow so the line is discarded on newline.
+            _bufOverflow = true;
         }
     }
 }
@@ -238,10 +249,14 @@ void CommandParser::cmdMove(char* p) {
     float speed = nextFloat(p);
     float accel = nextFloat(p);
 
+    // dist is required — reject if unparseable (e.g. "CMD MOVE abc").
+    if (isnan(dist)) { err("MOVE", "bad_args"); return; }
+
     // Speed and accel default to the profile defaults if not supplied (or if
-    // the supplied value is 0 / negative).
-    if (speed <= 0.0f) speed = DEFAULT_DIP_SPEED_MM_S;
-    if (accel <= 0.0f) accel = DEFAULT_ACCEL_MM_S2;
+    // the supplied value is 0 / negative).  NaN from a failed parse also
+    // falls through to the default via the <= 0.0f check (NaN is not > 0).
+    if (!(speed > 0.0f)) speed = DEFAULT_DIP_SPEED_MM_S;
+    if (!(accel > 0.0f)) accel = DEFAULT_ACCEL_MM_S2;
 
     // Transition to RUNNING before issuing the move so that updateMove()
     // in MotionController correctly identifies this as a CMD MOVE (not a
@@ -289,8 +304,11 @@ void CommandParser::cmdRunProfile(char* p) {
     // Validate: motion parameters must be positive; dwell times must be >= 0.
     // An invalid profile transitions directly to ERROR to prevent a silent
     // bad-parameter run.
-    if (dipSpd <= 0 || wdrawSpd <= 0 || accel <= 0 || depth <= 0 || nDips <= 0
-            || dwellBot < 0 || dwellTop < 0) {
+    // Use !(> 0) instead of <= 0 so that NaN (from a failed nextFloat parse)
+    // is correctly treated as invalid — NaN comparisons always return false,
+    // so "NaN <= 0" would pass silently, but "!(NaN > 0)" correctly fails.
+    if (!(dipSpd > 0) || !(wdrawSpd > 0) || !(accel > 0) || !(depth > 0)
+            || nDips <= 0 || dwellBot < 0 || dwellTop < 0) {
         err("RUN_PROFILE", "invalid_params");
         _sm.toError(ErrorCode::PROFILE_INVALID);
         return;
@@ -331,12 +349,20 @@ void CommandParser::cmdMoveSeg(char* p) {
     float speed = nextFloat(p);
     float accel = nextFloat(p);
 
-    if (speed <= 0.0f) {
+    // dist is required — reject if unparseable.
+    if (isnan(dist)) {
+        err("MOVE_SEG", "bad_args");
+        _collectingSegs = false;
+        return;
+    }
+    // speed must be a positive number; NaN is not > 0, so it is caught here.
+    if (!(speed > 0.0f)) {
         err("MOVE_SEG", "bad_speed");
         _collectingSegs = false;
         return;
     }
-    if (accel <= 0.0f) accel = DEFAULT_ACCEL_MM_S2;
+    // accel defaults if not supplied or invalid (NaN is also not > 0).
+    if (!(accel > 0.0f)) accel = DEFAULT_ACCEL_MM_S2;
 
     // addSegment() returns false if the buffer is full.
     if (!_mc.addSegment(dist, speed, accel)) {
@@ -415,8 +441,9 @@ void CommandParser::cmdSetSoftLimits(char* p) {
     float minMm = nextFloat(p);
     float maxMm = nextFloat(p);
 
-    // Sanity check: min must be strictly less than max.
-    if (minMm >= maxMm) {
+    // Reject unparseable arguments.  Also catches NaN: "NaN < NaN" is false,
+    // so !(minMm < maxMm) correctly rejects NaN inputs.
+    if (isnan(minMm) || isnan(maxMm) || !(minMm < maxMm)) {
         err("SET_SOFT_LIMITS", "min_must_be_less_than_max");
         return;
     }

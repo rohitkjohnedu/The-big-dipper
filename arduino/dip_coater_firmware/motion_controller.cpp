@@ -383,7 +383,7 @@ float MotionController::getActualVelocityMms()         { return actualVelocityMm
 float MotionController::getCommandedVelocityMms() const{ return _commandedVelocityMms; }
 float MotionController::getActualAccelMms2()      const{ return 0.0f;                  }  // not yet implemented
 
-bool MotionController::isStandstill() {
+bool MotionController::isMoving() {
     // getMotorState(STANDSTILL) returns 1 while the motor is actively stepping
     // and 0 when it has stopped.  See isMoveComplete() for the full explanation.
     return _stepper.getMotorState(STANDSTILL);
@@ -675,7 +675,7 @@ void MotionController::updateLimitBackoff() {
 void MotionController::updateMove() {
     // Skip if the state machine is not RUNNING.  This prevents Diagnostics
     // from accidentally completing a CMD MOVE that was never started — the
-    // Diagnostics module monitors its own completion via isStandstill().
+    // Diagnostics module monitors its own completion via isMoving().
     if (_sm.getState() != SystemState::RUNNING) return;
 
     // When the motor reaches the target, release the RUNNING state and print

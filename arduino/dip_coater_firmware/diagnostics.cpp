@@ -315,7 +315,7 @@ void Diagnostics::updateMotorTest() {
 // Move test — command a fixed distance, detect completion via STANDSTILL signal
 // =============================================================================
 //
-// Completion is detected by polling isStandstill() (which reads the TMC5130
+// Completion is detected by polling isMoving() (which reads the TMC5130
 // STANDSTILL register) rather than a position-stability heuristic.  The
 // heuristic approach (used in updateMotorTest) fails below ~0.17 mm/s because
 // the motor moves less than STABLE_MM per SETTLE_MS window at that speed.
@@ -348,10 +348,10 @@ void Diagnostics::updateMoveTest() {
         }
     }
 
-    // ---- Wait for STANDSTILL ------------------------------------------------
-    // isStandstill() returns true while the motor is actively stepping (1=moving,
+    // ---- Wait for motor to stop ---------------------------------------------
+    // isMoving() returns true while the motor is actively stepping (1=moving,
     // 0=stopped).  Stay here until the motor has stopped or the timeout fires.
-    if (_mc->isStandstill() && !timedOut) return;
+    if (_mc->isMoving() && !timedOut) return;
 
     // ---- Evaluate result ----------------------------------------------------
     float actual = currentPos - _moveTestStartPos;

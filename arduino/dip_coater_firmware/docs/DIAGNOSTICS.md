@@ -100,7 +100,7 @@ flowchart TD
     G -- Yes --> H["moveStarted = true"]
     G -- timed out --> I
 
-    H --> I{"isStandstill() == 0 (stopped)?<br/>or timed out?"}
+    H --> I{"isMoving() == false (stopped)?<br/>or timed out?"}
     I -- No --> I
     I -- Yes --> J["actual = currentPos - startPos<br/>ok = |actual - commanded| <= 1.5 mm"]
     J --> K["print DIAG:MOVE:PASS or FAIL<br/>with commanded= and actual="]

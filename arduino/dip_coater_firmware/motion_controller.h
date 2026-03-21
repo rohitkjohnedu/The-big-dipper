@@ -150,12 +150,11 @@ public:
     /**
      * @brief Returns true while the motor is actively stepping.
      *
-     * Note: getMotorState(STANDSTILL) in the UstepperS32 library returns 1
-     * while the motor is stepping and 0 when it has stopped.  This wrapper
-     * preserves that convention — callers should treat the return value as
-     * "motor is moving" rather than the literal meaning of "standstill".
+     * Wraps getMotorState(STANDSTILL) from the UstepperS32 library, which
+     * returns 1 while stepping and 0 when stopped — inverted from the register
+     * name but matching observed behaviour.
      */
-    bool isStandstill();
+    bool isMoving();
 
 private:
 

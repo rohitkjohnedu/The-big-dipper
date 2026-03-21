@@ -73,6 +73,7 @@ private:
 
     char    _buf[SERIAL_BUFFER_SIZE];
     uint8_t _len;
+    bool    _bufOverflow;   ///< Set when a line exceeded SERIAL_BUFFER_SIZE; cleared on newline
     uint8_t _telemRateHz;
 
     // Segmented move collection state
