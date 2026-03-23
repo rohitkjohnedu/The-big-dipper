@@ -44,6 +44,7 @@ from core.profile import DipProfile
 from core.serial_manager import SerialManager
 from core.telemetry_parser import TelemetryFrame
 from motion.parabolic_profile import ParabolicProfile
+from motion.spline_profile import SplineProfile
 from motion.trapezoidal_profile import TrapezoidalProfile
 from motion.velocity_profile import MoveSegment
 from tests.conftest import (
@@ -957,4 +958,233 @@ class TestParabolicProfileHardware:
         assert vel_range > 0.6 * self._SPEED, (
             f"Velocity range {vel_range:.2f} mm/s is less than 60 % of peak "
             f"{self._SPEED} mm/s — parabolic bell-curve shape not confirmed"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — SplineProfile against hardware
+# ---------------------------------------------------------------------------
+
+@pytest.mark.hardware
+class TestSplineProfileHardware:
+    """Validate SplineProfile kinematics against real motor telemetry.
+
+    Two static tests run immediately (no motion, no hardware required):
+
+    * :meth:`test_constructor_raises_not_implemented` — confirms the stub
+      raises the expected exception at construction time.
+    * :meth:`test_dispatch_raises_not_implemented` — confirms that
+      ``CommandInterface.run()`` raises ``NotImplementedError`` for a profile
+      with ``velocity_profile_type="spline"``, using ``MockArduino`` so no
+      physical port is needed.
+
+    Three hardware motion tests are marked ``skip`` and will be un-skipped
+    in Step 23 once ``SplineProfile.to_segments()`` is implemented:
+
+    * :meth:`test_run_spline_waypoints_reaches_ready`
+    * :meth:`test_spline_follows_waypoint_peak_speed`
+    * :meth:`test_spline_velocity_continuous`
+    """
+
+    # Waypoints: (position_mm, speed_mm_s).
+    # Position is relative to home; negative = down into coating solution.
+    _WAYPOINTS: list[tuple[float, float]] = [
+        ( 0.0,  0.0),   # start at rest at home
+        (-4.0,  2.0),   # slow entry into the solution meniscus
+        (-10.0, 8.0),   # accelerate through bulk solution
+        (-18.0, 3.0),   # decelerate as we approach target depth
+        (-20.0, 0.0),   # come to rest at target depth
+    ]
+    _PEAK_SPEED: float = 8.0    # mm/s — speed at the fastest waypoint
+    _DIST:       float = 20.0   # mm   — total descent depth
+    _ACCEL:      float = 30.0   # mm/s² — acceleration limit passed to the profile
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _home_and_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        hw_ci.home()
+        hw_flush_queue(hw_manager)
+        reached: bool = hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=60.0,
+        )
+        assert reached, "Could not reach READY before spline test"
+
+    def _build_profile(self) -> DipProfile:
+        """Build a DipProfile with ``velocity_profile_type="spline"`` and waypoints.
+
+        ``velocity_profile_data["waypoints"]`` holds the list of
+        ``(position_mm, speed_mm_s)`` pairs that ``SplineProfile`` will fit
+        an interpolant through once it is implemented.
+        """
+        return DipProfile(
+            name                  = "hw_spline",
+            dip_speed_mm_s        = self._PEAK_SPEED,
+            withdraw_speed_mm_s   = self._PEAK_SPEED,
+            accel_mm_s2           = self._ACCEL,
+            dip_depth_mm          = self._DIST,
+            dwell_bottom_ms       = 0,
+            dwell_top_ms          = 0,
+            n_dips                = 1,
+            velocity_profile_type = "spline",
+            velocity_profile_data = {"waypoints": list(self._WAYPOINTS)},
+        )
+
+    # ------------------------------------------------------------------
+    # Static checks (no hardware motion) — run now
+    # ------------------------------------------------------------------
+
+    def test_constructor_raises_not_implemented(self) -> None:
+        """SplineProfile raises NotImplementedError immediately on construction.
+
+        The stub exists so imports never fail, but instantiation must raise
+        a clear error rather than returning a broken object.
+        """
+        with pytest.raises(NotImplementedError, match="not yet implemented"):
+            SplineProfile()
+
+    def test_dispatch_raises_not_implemented(self) -> None:
+        """CommandInterface.run() raises NotImplementedError for spline profiles.
+
+        Verifies the ``"spline"`` branch in ``CommandInterface.run()`` hits the
+        correct dispatch arm.  Uses ``MockArduino`` so no physical port is needed
+        — the exception is raised before any serial command is sent.
+        """
+        from tests.mock_arduino import MockArduino
+
+        mock: MockArduino = MockArduino()
+        mock.start()
+        try:
+            ci: CommandInterface = CommandInterface(mock)  # type: ignore[arg-type]
+            profile: DipProfile  = self._build_profile()
+            with pytest.raises(NotImplementedError):
+                ci.run(profile)
+        finally:
+            mock.stop()
+
+    # ------------------------------------------------------------------
+    # Hardware motion tests — skipped until SplineProfile is implemented
+    # ------------------------------------------------------------------
+
+    @pytest.mark.skip(reason="SplineProfile not yet implemented — un-skip in Step 23")
+    def test_run_spline_waypoints_reaches_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Streaming a SplineProfile to hardware completes and Arduino returns
+        to READY.
+
+        When ``SplineProfile.to_segments()`` is implemented it will sample the
+        fitted spline at ``segment_length_mm`` intervals and produce a
+        ``MoveSegment`` list.  ``CommandInterface.run()`` will stream those
+        segments through ``BEGIN_SEGMENTED_MOVE`` just like the parabolic path.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        profile:  DipProfile   = self._build_profile()
+        recorder: DataRecorder = DataRecorder(log_dir=str(tmp_path))
+        recorder.start(profile.name)
+
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        reached: bool = hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=180.0,
+            recorder=recorder,
+        )
+        run: RecordedRun = recorder.finish()
+
+        assert reached,           "Arduino did not return to READY after spline run"
+        assert run.frame_count > 0, "No telemetry recorded during spline run"
+
+    @pytest.mark.skip(reason="SplineProfile not yet implemented — un-skip in Step 23")
+    def test_spline_follows_waypoint_peak_speed(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Peak recorded velocity is within 20 % of the fastest waypoint speed.
+
+        The fastest waypoint in ``_WAYPOINTS`` specifies ``_PEAK_SPEED`` mm/s.
+        A 20 % tolerance accounts for 10 Hz telemetry possibly missing the
+        exact peak frame and for hardware acceleration ramp settling time.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        profile:  DipProfile   = self._build_profile()
+        recorder: DataRecorder = DataRecorder(log_dir=str(tmp_path))
+        recorder.start(profile.name)
+
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=180.0,
+            recorder=recorder,
+        )
+        run: RecordedRun = recorder.finish()
+
+        vel: Float64Array = run.arrays["vel_actual_mm_s"]
+        peak_vel: float   = float(np.abs(vel).max())
+        tolerance: float  = 0.20 * self._PEAK_SPEED
+
+        assert peak_vel > 0.0, "No velocity recorded — motor may not have moved"
+        assert abs(peak_vel - self._PEAK_SPEED) < tolerance, (
+            f"Peak velocity {peak_vel:.2f} mm/s is not within 20 % of "
+            f"waypoint peak {self._PEAK_SPEED} mm/s"
+        )
+
+    @pytest.mark.skip(reason="SplineProfile not yet implemented — un-skip in Step 23")
+    def test_spline_velocity_continuous(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """No abrupt velocity jump exceeds 2 mm/s between consecutive telemetry
+        frames during motion.
+
+        Spline interpolation guarantees C1 continuity — the velocity curve must
+        have no step discontinuities.  At 10 Hz telemetry, a 2 mm/s inter-frame
+        jump corresponds to a 20 mm/s² transient, which is within the configured
+        acceleration limit and therefore rules out firmware-level step changes
+        between adjacent segments.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+
+        profile:  DipProfile   = self._build_profile()
+        recorder: DataRecorder = DataRecorder(log_dir=str(tmp_path))
+        recorder.start(profile.name)
+
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=180.0,
+            recorder=recorder,
+        )
+        run: RecordedRun = recorder.finish()
+
+        vel: Float64Array     = run.arrays["vel_actual_mm_s"]
+        vel_abs: Float64Array = np.abs(vel)
+        moving_mask           = vel_abs > 0.1
+        if moving_mask.sum() < 4:
+            pytest.skip("Too few moving frames to evaluate velocity continuity")
+
+        moving_vel: Float64Array = np.abs(vel[moving_mask])
+        diffs: Float64Array      = np.abs(np.diff(moving_vel))
+        max_jump: float          = float(diffs.max())
+
+        assert max_jump < 2.0, (
+            f"Velocity jump of {max_jump:.2f} mm/s between consecutive frames "
+            "exceeds 2 mm/s — spline interpolation may not be smooth"
         )

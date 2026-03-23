@@ -51,6 +51,15 @@ from core.telemetry_parser import TelemetryFrame
 # CLI options
 # ---------------------------------------------------------------------------
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom marks so pytest never warns about unknown marks."""
+    config.addinivalue_line(
+        "markers",
+        "hardware: tests that require a physical Arduino connected via serial"
+        " (deselect with '-m not hardware')",
+    )
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register custom command-line options for hardware tests."""
     parser.addoption(
