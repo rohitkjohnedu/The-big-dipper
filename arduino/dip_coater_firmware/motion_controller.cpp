@@ -74,6 +74,7 @@ MotionController::MotionController(StateMachine& sm)
     , _segCount           (0)
     , _segIndex           (0)
     , _jogUp              (false)
+    , _blending           (false)
     , _targetMm           (0.0f)
     , _moveStartMm        (0.0f)
     , _profileStartMm     (0.0f)
@@ -160,17 +161,20 @@ void MotionController::setSoftLimits(float minMm, float maxMm) {
 }
 
 void MotionController::stop() {
-    bool  wasJog     = (_mode == ProfileMode::JOG);
-    float savedSpeed = _commandedVelocityMms;   // save before zeroing
+    bool  wasJog      = (_mode == ProfileMode::JOG);
+    bool  wasBlending = _blending;
+    bool  blendDown   = wasBlending && (_segIndex < _segCount) && (_segments[_segIndex].distMm < 0);
+    float savedSpeed  = _commandedVelocityMms;   // save before zeroing
 
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
+    _blending             = false;
     _sm.toReady();
 
-    if (wasJog) {
-        // JOG uses runContinous() (velocity mode).  stop(SOFT) in velocity mode
-        // blocks the main loop for the full decel period.
+    if (wasJog || wasBlending) {
+        // JOG and velocity-blended SEGMENTED moves both use runContinous().
+        // stop(SOFT) in velocity mode blocks the main loop for the full decel period.
         //
         // Instead: compute the kinematic braking distance (v² / 2a) and command
         // a position-mode move to that point.  Position mode uses the TMC5130
@@ -178,7 +182,8 @@ void MotionController::stop() {
         // during decel.  The next setSpeed() call from any subsequent command
         // restores max velocity automatically.
         float decelMm = (savedSpeed * savedSpeed) / (2.0f * _accelMms2);
-        float target  = positionMm() + (_jogUp ? decelMm : -decelMm);
+        bool  goingUp = wasJog ? _jogUp : !blendDown;
+        float target  = positionMm() + (goingUp ? decelMm : -decelMm);
 
         // Clamp to soft limits so checkSoftLimit() does not reject the move.
         if (target > _softLimitMaxMm) target = _softLimitMaxMm;
@@ -199,6 +204,7 @@ void MotionController::estop() {
     _mode                 = ProfileMode::NONE;
     _commandedVelocityMms = 0.0f;
     _inDwell              = false;
+    _blending             = false;
     _paused               = false;
     _limitTriggered       = false;
     _limitBackoffActive   = false;
@@ -217,20 +223,25 @@ void MotionController::pause() {
     // Clear the active mode so update() stops running the profile,
     // then soft-stop the motor and enter PAUSED state.
     // Also clear limit-backoff flags so the backoff is not re-entered on resume.
-    bool  wasJog     = (_mode == ProfileMode::JOG);
-    float savedSpeed = _commandedVelocityMms;
+    bool  wasJog      = (_mode == ProfileMode::JOG);
+    bool  wasBlending = _blending;
+    bool  blendDown   = wasBlending && (_segIndex < _segCount) && (_segments[_segIndex].distMm < 0);
+    float savedSpeed  = _commandedVelocityMms;
 
     _paused             = true;
     _mode               = ProfileMode::NONE;
     _inDwell            = false;
+    _blending           = false;
     _limitTriggered     = false;
     _limitBackoffActive = false;
     _sm.toPaused();
 
-    if (wasJog) {
+    if (wasJog || wasBlending) {
         // Same non-blocking decel as stop() — see stop() for full rationale.
+        // Covers both JOG and velocity-blended SEGMENTED moves (both use runContinous).
         float decelMm = (savedSpeed * savedSpeed) / (2.0f * _accelMms2);
-        float target  = positionMm() + (_jogUp ? decelMm : -decelMm);
+        bool  goingUp = wasJog ? _jogUp : !blendDown;
+        float target  = positionMm() + (goingUp ? decelMm : -decelMm);
         if (target > _softLimitMaxMm) target = _softLimitMaxMm;
         if (target < _softLimitMinMm) target = _softLimitMinMm;
         startMoveToMm(target, savedSpeed);
@@ -392,6 +403,7 @@ void MotionController::runLoadedMove() {
     if (_segCount == 0) return;   // nothing to run
 
     _segIndex = 0;
+    _blending = false;   // always start in position mode; startCurrentSegment() enables blending as needed
     _mode     = ProfileMode::SEGMENTED;
     _sm.toRunning();
     _sm.setPhase(RunPhase::NONE);
@@ -639,16 +651,62 @@ void MotionController::startCurrentSegment() {
     if (_segIndex >= _segCount) return;
 
     const Segment& seg = _segments[_segIndex];
+
     if (seg.type == Segment::Type::DWELL) {
         // Hold-position segment — no motion, just start the dwell timer.
+        // Any preceding velocity-mode (blending) run must have already stopped
+        // (a DWELL always follows a position-mode terminating segment or another DWELL).
         startDwell(seg.dwellMs);
+        _blending = false;
+        return;
+    }
+
+    // ---- MOVE segment -------------------------------------------------------
+    _inDwell   = false;
+    _accelMms2 = seg.accelMms2;
+    bool  goingDown = (seg.distMm < 0);
+    float target    = getPositionMm() + seg.distMm;
+
+    // Look-ahead: enable velocity blending if the next segment is also a MOVE
+    // in the same direction.  Blending keeps the motor in runContinous() (velocity
+    // mode) through the segment boundary, so it never decelerates to zero between
+    // consecutive same-direction segments — producing smooth, continuous motion.
+    //
+    // The last segment in any same-direction run, and any segment before a
+    // direction reversal or DWELL, uses position mode (moveToAngle) so the motor
+    // decelerates cleanly to a stop at the intended target.
+    bool blend = false;
+    if (_segIndex + 1 < _segCount) {
+        const Segment& next = _segments[_segIndex + 1];
+        if (next.type == Segment::Type::MOVE &&
+            ((next.distMm < 0) == goingDown)) {
+            blend = true;
+        }
+    }
+
+    if (blend) {
+        // Velocity mode: set the TMC5130 velocity setpoint and (if not already
+        // running) issue runContinous().  The hardware ramp generator smoothly
+        // accelerates or decelerates between consecutive setSpeed() calls.
+        _targetMm             = target;   // threshold for position-based completion
+        _moveStartMm          = positionMm();
+        _moveStartMs          = millis();
+        _commandedVelocityMms = seg.speedMms;
+        setSpeed(seg.speedMms);
+        if (!_blending) {
+            // First segment in a blended run — start continuous motion.
+            _stepper.runContinous(goingDown ? CCW : CW);
+        }
+        // If already blending, the setSpeed() above is sufficient: the TMC5130
+        // hardware ramp smoothly transitions to the new velocity target.
+        _blending = true;
     } else {
-        // Motion segment — ensure the dwell flag is clear before starting the
-        // move, so isMoveComplete() is not gated by a stale _inDwell value.
-        _inDwell     = false;
-        _accelMms2   = seg.accelMms2;
-        float target = getPositionMm() + seg.distMm;
+        // Position mode: motor decelerates to a full stop at the computed target.
+        // When transitioning out of velocity mode (runContinous), calling
+        // moveToAngle() inside startMoveToMm() switches the TMC5130 hardware ramp
+        // to position mode and decelerates naturally — no explicit stop(SOFT) needed.
         startMoveToMm(target, seg.speedMms);
+        _blending = false;
     }
 }
 
@@ -679,8 +737,17 @@ void MotionController::updateSegmented() {
         // Waiting for the dwell timer set by startCurrentSegment().
         if (!isDwellComplete()) return;
         _inDwell = false;
+    } else if (_blending) {
+        // Velocity mode: the STANDSTILL flag never fires while runContinous() is
+        // active, so use a position threshold instead.
+        // When the encoder crosses _targetMm the segment boundary is reached and
+        // startCurrentSegment() for the next segment updates the velocity setpoint
+        // (or switches to position mode for the final segment in the run).
+        float pos = positionMm();
+        bool  goingDown = (seg.distMm < 0);
+        if (goingDown ? (pos > _targetMm) : (pos < _targetMm)) return;
     } else {
-        // Waiting for the motor to reach the move target.
+        // Position mode: wait for the motor to reach the move target.
         if (!isMoveComplete()) return;
     }
 

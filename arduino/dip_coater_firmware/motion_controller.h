@@ -221,6 +221,9 @@ private:
     // Jog state
     bool _jogUp;             ///< Direction saved by jog() — used by resume() to restart a paused jog
 
+    // Velocity blending state
+    bool _blending;          ///< True while the current MOVE segment uses velocity mode (runContinuous) for smooth same-direction transitions
+
     // Move tracking
     float    _targetMm;        ///< Absolute target for the current move (mm)
     float    _moveStartMm;     ///< Position recorded at the start of each move (mm)
