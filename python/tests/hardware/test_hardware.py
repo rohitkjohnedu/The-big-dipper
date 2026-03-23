@@ -43,6 +43,7 @@ from core.data_recorder import DataRecorder, Float64Array, RecordedRun
 from core.profile import DipProfile
 from core.serial_manager import SerialManager
 from core.telemetry_parser import TelemetryFrame
+from motion.parabolic_profile import ParabolicProfile
 from motion.trapezoidal_profile import TrapezoidalProfile
 from motion.velocity_profile import MoveSegment
 from tests.conftest import (
@@ -735,4 +736,225 @@ class TestTrapezoidalProfileHardware:
         assert abs(measured_s - predicted_s) < tolerance, (
             f"Measured duration {measured_s:.2f} s deviates from predicted "
             f"{predicted_s:.2f} s by more than 30 %"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests — ParabolicProfile against hardware
+# ---------------------------------------------------------------------------
+
+@pytest.mark.hardware
+class TestParabolicProfileHardware:
+    """Validate ParabolicProfile kinematics against real motor telemetry.
+
+    These tests stream a :class:`~motion.parabolic_profile.ParabolicProfile`
+    via the ``BEGIN_SEGMENTED_MOVE`` path and verify that the recorded velocity
+    follows the expected parabolic bell-curve shape — peaking near the midpoint
+    of travel and starting/ending at a substantially lower speed.
+    """
+
+    _SPEED: float = 8.0    # mm/s  — peak speed at the profile midpoint
+    _ACCEL: float = 30.0   # mm/s²
+    _DIST:  float = 20.0   # mm
+
+    # ------------------------------------------------------------------
+    # Shared helpers (mirrors TestTrapezoidalProfileHardware)
+    # ------------------------------------------------------------------
+
+    def _home_and_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        hw_ci.home()
+        hw_flush_queue(hw_manager)
+        reached: bool = hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=60.0,
+        )
+        assert reached, "Could not reach READY before parabolic test"
+
+    def _build_profile(self, seg_len: float = 1.0) -> DipProfile:
+        """Wrap a ParabolicProfile in a DipProfile ready for hw_ci.run()."""
+        p: ParabolicProfile = ParabolicProfile(
+            target_speed_mm_s = self._SPEED,
+            distance_mm       = -self._DIST,
+            accel_mm_s2       = self._ACCEL,
+        )
+        segs: list[MoveSegment] = p.to_segments(seg_len)
+        seg_dicts: list[dict[str, object]] = [
+            {
+                "type":        "move",
+                "distance_mm": float(s.distance_mm),
+                "speed_mm_s":  float(s.speed_mm_s),
+                "accel_mm_s2": float(s.accel_mm_s2),
+            }
+            for s in segs
+        ]
+        return DipProfile(
+            name                  = "hw_parabolic",
+            dip_speed_mm_s        = self._SPEED,
+            withdraw_speed_mm_s   = self._SPEED,
+            accel_mm_s2           = self._ACCEL,
+            dip_depth_mm          = self._DIST,
+            dwell_bottom_ms       = 0,
+            dwell_top_ms          = 0,
+            n_dips                = 1,
+            velocity_profile_type = "segmented",
+            velocity_profile_data = {"segments": seg_dicts},
+        )
+
+    def _run_and_record(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        log_dir: str,
+        seg_len: float = 1.0,
+    ) -> RecordedRun:
+        profile: DipProfile = self._build_profile(seg_len)
+        recorder: DataRecorder = DataRecorder(log_dir=log_dir)
+        recorder.start(profile.name)
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=180.0,
+            recorder=recorder,
+        )
+        return recorder.finish()
+
+    # ------------------------------------------------------------------
+    # Static checks (no hardware motion)
+    # ------------------------------------------------------------------
+
+    def test_profile_fits_in_arduino_buffer(self) -> None:
+        """20 mm / 1 mm = 20 segments — well within the 64-slot buffer."""
+        p: ParabolicProfile = ParabolicProfile(
+            target_speed_mm_s = self._SPEED,
+            distance_mm       = -self._DIST,
+            accel_mm_s2       = self._ACCEL,
+        )
+        assert p.fits_in_arduino_buffer(segment_length_mm=1.0), (
+            f"Profile produces {p.segment_count(1.0)} segments — exceeds buffer of 64"
+        )
+
+    def test_segment_distances_sum_to_profile_distance(self) -> None:
+        """to_segments() distances sum exactly to the total profile distance."""
+        p: ParabolicProfile = ParabolicProfile(
+            target_speed_mm_s = self._SPEED,
+            distance_mm       = -self._DIST,
+            accel_mm_s2       = self._ACCEL,
+        )
+        segs: list[MoveSegment] = p.to_segments(1.0)
+        total: float = sum(abs(s.distance_mm) for s in segs)
+        assert total == pytest.approx(self._DIST, rel=1e-6)
+
+    # ------------------------------------------------------------------
+    # Hardware motion tests
+    # ------------------------------------------------------------------
+
+    def test_run_parabolic_reaches_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Streaming a ParabolicProfile via BEGIN_SEGMENTED_MOVE completes
+        successfully and the Arduino returns to READY."""
+        self._home_and_ready(hw_manager, hw_ci)
+        run: RecordedRun = self._run_and_record(hw_manager, hw_ci, str(tmp_path))
+        assert run.frame_count > 0, "No telemetry recorded during parabolic run"
+
+    def test_parabolic_peak_velocity(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Peak recorded velocity is within 20 % of the target peak speed.
+
+        A 20 % tolerance accounts for 10 Hz telemetry possibly missing the
+        exact peak frame and for hardware acceleration ramp settling time.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+        run: RecordedRun = self._run_and_record(hw_manager, hw_ci, str(tmp_path))
+
+        vel: Float64Array = run.arrays["vel_actual_mm_s"]
+        peak_vel: float   = float(np.abs(vel).max())
+        tolerance: float  = 0.20 * self._SPEED
+
+        assert peak_vel > 0.0, "No velocity recorded — motor may not have moved"
+        assert abs(peak_vel - self._SPEED) < tolerance, (
+            f"Peak velocity {peak_vel:.2f} mm/s is not within 20 % of "
+            f"target {self._SPEED} mm/s"
+        )
+
+    def test_parabolic_velocity_starts_slow(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Early recorded velocity is significantly below the peak speed.
+
+        The parabolic profile starts near 0 mm/s and accelerates to the peak
+        at the midpoint.  The first quarter of recorded frames should have a
+        maximum speed below 50 % of the peak — this would not hold for a
+        trapezoidal profile, which reaches cruise speed within ~1 mm.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+        run: RecordedRun = self._run_and_record(hw_manager, hw_ci, str(tmp_path))
+
+        vel: Float64Array    = run.arrays["vel_actual_mm_s"]
+        vel_abs: Float64Array = np.abs(vel)
+
+        # Only consider frames where the motor is actually moving (|v| > 0.1).
+        moving_mask = vel_abs > 0.1
+        if moving_mask.sum() < 8:
+            pytest.skip("Too few moving frames to evaluate velocity shape")
+
+        moving_vel: Float64Array = vel_abs[moving_mask]
+
+        # First quarter of moving frames should be well below the peak.
+        n_early: int             = max(1, len(moving_vel) // 4)
+        early_max: float         = float(moving_vel[:n_early].max())
+        peak_vel: float          = float(moving_vel.max())
+
+        assert early_max < 0.5 * peak_vel, (
+            f"Early-phase max velocity {early_max:.2f} mm/s is not below 50 % of "
+            f"peak {peak_vel:.2f} mm/s — profile may not have the expected "
+            "parabolic shape (slow entry)"
+        )
+
+    def test_parabolic_velocity_range_exceeds_trapezoidal_range(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """The parabolic profile uses a wider velocity range than a trapezoidal
+        profile at the same peak speed.
+
+        A trapezoidal profile spends most of its time at cruise speed, so
+        |v_max − v_min| ≈ cruise − ramp_entry ≈ small.
+        A parabolic profile ramps from near-zero to peak, so
+        |v_max − v_min| spans almost the full [0, v_peak] range.
+        """
+        self._home_and_ready(hw_manager, hw_ci)
+        run: RecordedRun = self._run_and_record(hw_manager, hw_ci, str(tmp_path))
+
+        vel: Float64Array     = run.arrays["vel_actual_mm_s"]
+        vel_abs: Float64Array = np.abs(vel)
+        moving_mask           = vel_abs > 0.1
+        if moving_mask.sum() < 8:
+            pytest.skip("Too few moving frames to evaluate velocity range")
+
+        moving_vel: Float64Array = vel_abs[moving_mask]
+        vel_range: float         = float(moving_vel.max() - moving_vel.min())
+
+        # The parabolic profile spans nearly the full speed range.
+        # Require at least 60 % of v_peak covered.
+        assert vel_range > 0.6 * self._SPEED, (
+            f"Velocity range {vel_range:.2f} mm/s is less than 60 % of peak "
+            f"{self._SPEED} mm/s — parabolic bell-curve shape not confirmed"
         )
