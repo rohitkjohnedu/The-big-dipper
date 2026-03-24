@@ -161,20 +161,15 @@ class LivePlot(QWidget):
             raw_accel = (vel_actual - self._prev_vel_actual) / dt
             self._accel_ema = 0.25 * raw_accel + 0.75 * self._accel_ema
 
-        # --- Ramp vel_cmd_display toward target at accel rate ----------------
-        # On the very first frame dt=0 — leave _vel_cmd_display at 0 so the
-        # ramp engages from the next real frame interval.
-        _MIN_RAMP_RATE = 20.0  # mm/s² minimum ramp rate when accel_ema ≈ 0
-        if dt > 1e-6:
-            ramp_rate = max(abs(self._accel_ema), _MIN_RAMP_RATE)
-            delta     = vel_cmd_target - self._vel_cmd_display
-            max_step  = ramp_rate * dt
-            if abs(delta) <= max_step:
-                self._vel_cmd_display = vel_cmd_target
-            else:
-                self._vel_cmd_display += math.copysign(max_step, delta)
+        # Commanded velocity display: show the firmware target directly.
+        # Firmware sends an unsigned magnitude; vel_cmd_target already has the
+        # correct sign (from vel_actual) and noise-floor zeroing applied.
+        # No synthetic ramp: commanded shows the controller's target, actual
+        # shows the motor's physical response — the gap between the two lines
+        # IS the useful information (velocity error / ramp lag).
+        self._vel_cmd_display = vel_cmd_target
 
-        vel_cmd   = self._vel_cmd_display
+        vel_cmd   = vel_cmd_target
         accel_out = self._accel_ema
 
         self._prev_t_ms       = frame.timestamp_ms
