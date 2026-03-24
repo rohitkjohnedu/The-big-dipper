@@ -135,17 +135,24 @@ class LivePlot(QWidget):
 
         t_s: float = (frame.timestamp_ms - self._t0) / 1000.0
 
+        import math
+        # Firmware reports vel_commanded as unsigned magnitude; copy the sign
+        # from vel_actual (encoder-derived, already signed) so the plot shows
+        # negative values during downward motion.
+        vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s) \
+                  if frame.vel_actual_mm_s != 0.0 else frame.vel_commanded_mm_s
+
         # Rolling buffers
         self._t.append(t_s)
         self._pos.append(frame.pos_mm)
-        self._vel_cmd.append(frame.vel_commanded_mm_s)
+        self._vel_cmd.append(vel_cmd)
         self._vel_act.append(frame.vel_actual_mm_s)
         self._accel.append(frame.accel_mm_s2)
 
         # Full-history buffers
         self._all_t.append(t_s)
         self._all_pos.append(frame.pos_mm)
-        self._all_vel_cmd.append(frame.vel_commanded_mm_s)
+        self._all_vel_cmd.append(vel_cmd)
         self._all_vel_act.append(frame.vel_actual_mm_s)
         self._all_accel.append(frame.accel_mm_s2)
 
