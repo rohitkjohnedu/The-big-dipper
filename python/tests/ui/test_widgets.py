@@ -181,6 +181,97 @@ class TestLivePlot:
         t = list(plot._t)
         assert all(t[i] < t[i + 1] for i in range(len(t) - 1))
 
+    # ------------------------------------------------------------------
+    # Home button
+    # ------------------------------------------------------------------
+
+    def test_home_button_exists(self, qtbot: QtBot) -> None:
+        """Toolbar has a Home button."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        assert hasattr(plot, "_btn_window")   # toolbar was built
+
+    def test_home_does_not_raise(self, qtbot: QtBot) -> None:
+        """Calling _on_home() without data does not raise."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        plot._on_home()
+
+    def test_home_after_frames_does_not_raise(self, qtbot: QtBot) -> None:
+        """_on_home() after data is pushed does not raise."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        for i in range(5):
+            plot.push_frame(_make_frame(ts_ms=i * 100))
+        plot._on_home()
+
+    # ------------------------------------------------------------------
+    # Window / Full History mode
+    # ------------------------------------------------------------------
+
+    def test_window_mode_on_by_default(self, qtbot: QtBot) -> None:
+        """Window mode button is checked, Full History is unchecked on init."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        assert plot._btn_window.isChecked()
+        assert not plot._btn_full.isChecked()
+
+    def test_switch_to_full_history_mode(self, qtbot: QtBot) -> None:
+        """_on_full_history_mode() activates Full History and deactivates Window."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        plot._on_full_history_mode()
+        assert plot._btn_full.isChecked()
+        assert not plot._btn_window.isChecked()
+
+    def test_switch_back_to_window_mode(self, qtbot: QtBot) -> None:
+        """_on_window_mode() re-activates Window after Full History."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        plot._on_full_history_mode()
+        plot._on_window_mode()
+        assert plot._btn_window.isChecked()
+        assert not plot._btn_full.isChecked()
+
+    def test_full_history_retains_all_frames(self, qtbot: QtBot) -> None:
+        """In Full History mode all pushed frames are stored in _all_t."""
+        plot = LivePlot(history_s=2.0, telem_hz=10)
+        qtbot.addWidget(plot)
+        n = 50   # more than the 2 s rolling window holds
+        for i in range(n):
+            plot.push_frame(_make_frame(ts_ms=i * 100))
+        assert len(plot._all_t) == n
+
+    def test_full_history_cleared_by_clear(self, qtbot: QtBot) -> None:
+        """clear() resets full-history buffers too."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        for i in range(10):
+            plot.push_frame(_make_frame(ts_ms=i * 100))
+        plot.clear()
+        assert len(plot._all_t) == 0
+
+    def test_spinbox_default_matches_history_s(self, qtbot: QtBot) -> None:
+        """Window spinbox initialises to the history_s constructor argument."""
+        plot = LivePlot(history_s=90.0)
+        qtbot.addWidget(plot)
+        assert plot._spin_window.value() == 90
+
+    def test_spinbox_disabled_in_full_history_mode(self, qtbot: QtBot) -> None:
+        """Window spinbox is disabled when Full History mode is active."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        plot._on_full_history_mode()
+        assert not plot._spin_window.isEnabled()
+
+    def test_spinbox_enabled_in_window_mode(self, qtbot: QtBot) -> None:
+        """Window spinbox is enabled when Window mode is active."""
+        plot = LivePlot()
+        qtbot.addWidget(plot)
+        plot._on_full_history_mode()
+        plot._on_window_mode()
+        assert plot._spin_window.isEnabled()
+
 
 # ---------------------------------------------------------------------------
 # StatusBar

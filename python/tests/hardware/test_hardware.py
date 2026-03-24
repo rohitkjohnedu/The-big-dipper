@@ -1188,3 +1188,421 @@ class TestSplineProfileHardware:
             f"Velocity jump of {max_jump:.2f} mm/s between consecutive frames "
             "exceeds 2 mm/s — spline interpolation may not be smooth"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests — live telemetry quality and pipeline
+# ---------------------------------------------------------------------------
+
+@pytest.mark.hardware
+class TestTelemetryHardware:
+    """Verify the live telemetry pipeline on real hardware.
+
+    These tests focus on the *quality* and *correctness* of the data that
+    arrives from the Arduino: timing accuracy, timestamp monotonicity,
+    field consistency, phase transitions during a real run, commanded vs
+    actual velocity separation, and the raw_queue feed that drives the
+    serial monitor tab.
+
+    All tests home first so that the Arduino is in READY state with a known
+    position (0 mm at the bottom endstop) before any measurements are taken.
+    """
+
+    # Profile used throughout this class — short, slow, single dip.
+    _DIP_SPEED:  float = 5.0    # mm/s
+    _WITHDRAW:   float = 5.0    # mm/s
+    _ACCEL:      float = 20.0   # mm/s²
+    _DEPTH:      float = 20.0   # mm
+    _DWELL_BOT:  int   = 500    # ms
+    _DWELL_TOP:  int   = 200    # ms
+
+    def _home_and_ready(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        hw_ci.home()
+        hw_flush_queue(hw_manager)
+        reached = hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=60.0,
+        )
+        assert reached, "Could not reach READY before telemetry test"
+
+    def _run_and_collect(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> RecordedRun:
+        """Home, run the short dip profile, record, and return RecordedRun."""
+        self._home_and_ready(hw_manager, hw_ci)
+        profile = DipProfile(
+            name                = "hw_telem_test",
+            dip_speed_mm_s      = self._DIP_SPEED,
+            withdraw_speed_mm_s = self._WITHDRAW,
+            accel_mm_s2         = self._ACCEL,
+            dip_depth_mm        = self._DEPTH,
+            dwell_bottom_ms     = self._DWELL_BOT,
+            dwell_top_ms        = self._DWELL_TOP,
+            n_dips              = 1,
+        )
+        recorder = DataRecorder(log_dir=str(tmp_path))
+        recorder.start(profile.name)
+        hw_ci.run(profile)
+        hw_flush_queue(hw_manager)
+        hw_wait_for_state_transition(
+            hw_manager, "READY", "READY",
+            timeout_leave_s=5.0, timeout_arrive_s=120.0,
+            recorder=recorder,
+        )
+        return recorder.finish()
+
+    # ------------------------------------------------------------------
+    # Timing and rate accuracy
+    # ------------------------------------------------------------------
+
+    def test_telem_rate_approximately_correct(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """Inter-frame wall-clock intervals are within 50 % of the configured rate.
+
+        50 % is intentionally loose — Python scheduling jitter and OS timer
+        resolution mean exact 100 ms spacing is not guaranteed.  The test
+        confirms the Arduino is broadcasting near the requested rate, not that
+        timing is sub-millisecond precise.
+        """
+        hw_ci.set_telem_rate(TELEM_HZ)
+        hw_flush_queue(hw_manager)
+
+        n_frames = 15
+        timestamps: list[float] = []
+        deadline = time.monotonic() + 10.0
+
+        while len(timestamps) < n_frames and time.monotonic() < deadline:
+            try:
+                hw_manager.telem_queue.get(timeout=0.5)
+                timestamps.append(time.monotonic())
+            except queue.Empty:
+                pass
+
+        assert len(timestamps) >= n_frames, (
+            f"Only received {len(timestamps)}/{n_frames} frames within 10 s"
+        )
+
+        intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
+        expected_interval = 1.0 / TELEM_HZ
+        tolerance = 0.50 * expected_interval   # ±50 %
+
+        bad = [iv for iv in intervals if abs(iv - expected_interval) > tolerance]
+        assert not bad, (
+            f"{len(bad)}/{len(intervals)} inter-frame intervals outside ±50 % of "
+            f"{expected_interval * 1000:.0f} ms: {[f'{v*1000:.0f}ms' for v in bad]}"
+        )
+
+    def test_timestamps_monotonically_increasing(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """Arduino millis() timestamps never decrease between consecutive frames.
+
+        A non-monotonic timestamp indicates a firmware clock overflow or a
+        frame being received out of order — neither should happen in normal
+        operation.
+        """
+        hw_ci.set_telem_rate(TELEM_HZ)
+        hw_flush_queue(hw_manager)
+
+        frames = _collect_frames(hw_manager, n=20, timeout_s=10.0)
+        assert len(frames) >= 10, f"Too few frames to test monotonicity: {len(frames)}"
+
+        for i in range(1, len(frames)):
+            assert frames[i].timestamp_ms >= frames[i - 1].timestamp_ms, (
+                f"Timestamp went backwards at index {i}: "
+                f"{frames[i-1].timestamp_ms} → {frames[i].timestamp_ms}"
+            )
+
+    # ------------------------------------------------------------------
+    # Field validity at rest (READY state)
+    # ------------------------------------------------------------------
+
+    def test_position_near_backoff_after_home(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """Position after homing is within 2 mm of -HOMING_BACKOFF_MM (-5 mm).
+
+        Homing sequence:
+          1. Carriage moves up until the top endstop triggers.
+          2. Encoder is zeroed at the top endstop (setHome()).
+          3. Carriage backs off downward by HOMING_BACKOFF_MM = 5 mm.
+          4. Arduino enters READY state; reported position ≈ -5 mm.
+
+        Downward motion is negative in this coordinate system — dipping moves
+        from -5 mm toward larger negative values (e.g. -25 mm for a 20 mm dip).
+        Any deviation larger than 2 mm indicates a homing or encoder fault.
+        """
+        _BACKOFF_MM: float = 5.0   # must match HOMING_BACKOFF_MM in config.h
+        self._home_and_ready(hw_manager, hw_ci)
+        frame = hw_manager.telem_queue.get(timeout=5.0)
+        assert abs(frame.pos_mm - (-_BACKOFF_MM)) < 2.0, (
+            f"Position after home is {frame.pos_mm:.2f} mm — "
+            f"expected near -{_BACKOFF_MM} mm (top endstop origin, backed off downward)"
+        )
+
+    def test_velocity_zero_at_rest(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """Both velocity fields are near zero when the motor is stationary."""
+        self._home_and_ready(hw_manager, hw_ci)
+
+        # Collect a few frames and check they are all stationary.
+        frames = _collect_frames(hw_manager, n=5, timeout_s=5.0)
+        assert frames, "No frames received after homing"
+
+        for f in frames:
+            assert abs(f.vel_actual_mm_s) < 0.5, (
+                f"Actual velocity {f.vel_actual_mm_s:.2f} mm/s at rest"
+            )
+            assert abs(f.vel_commanded_mm_s) < 0.5, (
+                f"Commanded velocity {f.vel_commanded_mm_s:.2f} mm/s at rest"
+            )
+
+    # ------------------------------------------------------------------
+    # Phase transitions during a full dip cycle
+    # ------------------------------------------------------------------
+
+    def test_descending_phase_observed(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """At least one telemetry frame reports phase=DESCENDING during the run."""
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        assert "DESCENDING" in run.phases, (
+            "DESCENDING phase never seen in telemetry — "
+            "Arduino may not be reporting sub-phases"
+        )
+
+    def test_ascending_phase_observed(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """At least one telemetry frame reports phase=ASCENDING during the run."""
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        assert "ASCENDING" in run.phases, (
+            "ASCENDING phase never seen in telemetry — "
+            "run may have been interrupted or aborted early"
+        )
+
+    def test_dwell_bottom_phase_observed(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """DWELL_BOTTOM phase appears between DESCENDING and ASCENDING.
+
+        Confirms the Arduino holds position for the configured dwell period
+        rather than reversing immediately on reaching target depth.
+        """
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        assert "DWELL_BOTTOM" in run.phases, (
+            "DWELL_BOTTOM phase never seen — dwell may have been skipped"
+        )
+
+    def test_phase_order_is_correct(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Phase sequence follows DESCENDING → DWELL_BOTTOM → ASCENDING order.
+
+        Extracts the *first occurrence* index of each key phase and asserts
+        the expected ordering.  DWELL_TOP is optional (dwell_top_ms may be 0).
+        """
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        phases = run.phases
+
+        required = ("DESCENDING", "DWELL_BOTTOM", "ASCENDING")
+        for phase in required:
+            assert phase in phases, f"Phase {phase!r} not seen during run"
+
+        idx_desc  = phases.index("DESCENDING")
+        idx_dwell = phases.index("DWELL_BOTTOM")
+        idx_asc   = phases.index("ASCENDING")
+
+        assert idx_desc < idx_dwell < idx_asc, (
+            f"Phase order incorrect: DESCENDING@{idx_desc}, "
+            f"DWELL_BOTTOM@{idx_dwell}, ASCENDING@{idx_asc}"
+        )
+
+    # ------------------------------------------------------------------
+    # Position and velocity during motion
+    # ------------------------------------------------------------------
+
+    def test_peak_displacement_matches_dip_depth(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Maximum recorded displacement from start position matches commanded dip depth.
+
+        After homing the stage is at -HOMING_BACKOFF_MM (≈ -5 mm) — the encoder
+        zeros at the top endstop and backs off downward.  A dip of depth D
+        descends to approximately -(BACKOFF + D).  Travel relative to the start
+        position is abs(min_pos - start_pos), which should equal D.
+
+        15 % tolerance accounts for 10 Hz telemetry possibly missing the exact
+        turnaround frame and for closed-loop encoder feedback settling.
+        """
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        pos = run.arrays["pos_mm"]
+        start_pos         = float(pos[0])
+        peak_displacement = float(abs(pos.min() - start_pos))
+        tolerance = 0.15 * self._DEPTH
+
+        assert abs(peak_displacement - self._DEPTH) < tolerance, (
+            f"Peak displacement {peak_displacement:.2f} mm deviates from "
+            f"commanded depth {self._DEPTH} mm by more than 15 % "
+            f"(start_pos={start_pos:.2f} mm, min_pos={pos.min():.2f} mm)"
+        )
+
+    def test_peak_velocity_within_tolerance(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Peak recorded velocity during descent is within 25 % of dip_speed_mm_s.
+
+        25 % tolerance accounts for short 20 mm move where the motor may not
+        fully reach cruise speed before beginning deceleration, and for 10 Hz
+        sampling possibly missing the exact cruise peak.
+        """
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        vel = run.arrays["vel_actual_mm_s"]
+        peak_vel = float(np.abs(vel).max())
+        tolerance = 0.25 * self._DIP_SPEED
+
+        assert peak_vel > 0.0, "No velocity recorded — motor may not have moved"
+        assert abs(peak_vel - self._DIP_SPEED) < tolerance, (
+            f"Peak velocity {peak_vel:.2f} mm/s deviates from "
+            f"dip_speed {self._DIP_SPEED} mm/s by more than 25 %"
+        )
+
+    def test_commanded_leads_actual_during_ramp(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Commanded velocity exceeds actual velocity on at least one ramp frame.
+
+        The uStepperS32 closed-loop PID means the motor takes a finite time to
+        reach commanded speed.  During acceleration, vel_commanded_mm_s should
+        exceed vel_actual_mm_s on at least a few frames.  If they are always
+        equal, the firmware may be broadcasting the same value for both fields.
+        """
+        run = self._run_and_collect(hw_manager, hw_ci, tmp_path)
+        vel_cmd = run.arrays["vel_commanded_mm_s"]
+        vel_act = run.arrays["vel_actual_mm_s"]
+
+        # Find frames where both are non-trivial (motor is actually moving).
+        moving = np.abs(vel_act) > 0.5
+        if moving.sum() < 3:
+            pytest.skip("Too few moving frames to evaluate commanded vs actual")
+
+        commanded_exceeds_actual = np.any(
+            np.abs(vel_cmd[moving]) > np.abs(vel_act[moving]) + 0.3
+        )
+        assert commanded_exceeds_actual, (
+            "Commanded velocity never exceeded actual velocity during motion. "
+            "Both fields may be reporting the same value — check firmware telemetry."
+        )
+
+    # ------------------------------------------------------------------
+    # raw_queue — serial monitor feed
+    # ------------------------------------------------------------------
+
+    def test_raw_queue_contains_tx_entries(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """raw_queue receives at least one TX entry after a command is sent.
+
+        Verifies that SerialManager.send_command() puts a 'TX ...' string on
+        raw_queue so the serial monitor tab has data to display.
+        """
+        # Drain any stale entries.
+        while True:
+            try:
+                hw_manager.raw_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        hw_ci.set_telem_rate(TELEM_HZ)   # sends one command
+
+        # Give the TX entry time to land on the queue.
+        time.sleep(0.1)
+
+        entries: list[str] = []
+        while True:
+            try:
+                entries.append(hw_manager.raw_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        tx_entries = [e for e in entries if e.startswith("TX ")]
+        assert tx_entries, (
+            "No TX entries found in raw_queue after sending a command. "
+            "SerialManager.send_command() may not be populating raw_queue."
+        )
+
+    def test_raw_queue_contains_rx_entries(
+        self,
+        hw_manager: SerialManager,
+        hw_ci: CommandInterface,
+    ) -> None:
+        """raw_queue receives RX entries (ACK and TELEM) from the Arduino.
+
+        Verifies the serial read loop is copying incoming lines to raw_queue
+        so the serial monitor tab sees real Arduino output.
+        """
+        hw_ci.set_telem_rate(TELEM_HZ)
+        hw_flush_queue(hw_manager)
+
+        # Drain raw_queue of any stale entries.
+        while True:
+            try:
+                hw_manager.raw_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        # Wait for a few telemetry frames so RX entries accumulate.
+        _collect_frames(hw_manager, n=5, timeout_s=5.0)
+
+        entries: list[str] = []
+        while True:
+            try:
+                entries.append(hw_manager.raw_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        rx_telem = [e for e in entries if e.startswith("RX TELEM")]
+        assert rx_telem, (
+            "No RX TELEM entries in raw_queue. "
+            "SerialManager._read_loop() may not be populating raw_queue."
+        )

@@ -3,8 +3,9 @@ tests/ui/test_tabs.py
 =====================
 
 Unit tests for:
-  * ui/tabs/control_tab.py    — ControlTab
+  * ui/tabs/control_tab.py       — ControlTab
   * ui/tabs/serial_monitor_tab.py — SerialMonitorTab
+  * ui/tabs/telemetry_tab.py     — TelemetryTab
 
 Run:
     uv run pytest tests/ui/test_tabs.py -v
@@ -13,6 +14,8 @@ Run:
 from __future__ import annotations
 
 import queue
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -21,8 +24,10 @@ from PyQt6.QtWidgets import QApplication
 
 from core.command_interface import CommandError
 from core.profile import DipProfile
+from core.telemetry_parser import TelemetryFrame
 from ui.tabs.control_tab import ControlTab
 from ui.tabs.serial_monitor_tab import SerialMonitorTab
+from ui.tabs.telemetry_tab import TelemetryTab
 
 
 # ---------------------------------------------------------------------------
@@ -520,3 +525,421 @@ class TestSerialMonitorTab:
         qtbot.addWidget(tab)
         tab._input.push_history("   ")
         assert tab._input._history == []
+
+
+# ===========================================================================
+# TestTelemetryTab
+# ===========================================================================
+
+def _make_frame(
+    state: str = "RUNNING",
+    phase: str = "DESCENDING",
+    pos: float = 10.0,
+    vel_act: float = 5.0,
+    vel_cmd: float = 5.0,
+    accel: float = 0.0,
+    ts: int = 1000,
+) -> TelemetryFrame:
+    return TelemetryFrame(
+        timestamp_ms=ts,
+        pos_mm=pos,
+        vel_actual_mm_s=vel_act,
+        vel_commanded_mm_s=vel_cmd,
+        accel_mm_s2=accel,
+        state=state,
+        phase=phase,
+    )
+
+
+class TestTelemetryTab:
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
+    def test_creates_without_error(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+
+    def test_set_rate_button_disabled_initially(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert not tab._btn_set_rate.isEnabled()
+
+    def test_auto_record_on_by_default(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert tab._chk_auto.isChecked()
+
+    # ------------------------------------------------------------------
+    # set_command_interface
+    # ------------------------------------------------------------------
+
+    def test_set_rate_button_enabled_when_ci_set(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.set_command_interface(_make_ci())
+        assert tab._btn_set_rate.isEnabled()
+
+    def test_set_rate_button_disabled_when_ci_cleared(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.set_command_interface(_make_ci())
+        tab.set_command_interface(None)
+        assert not tab._btn_set_rate.isEnabled()
+
+    # ------------------------------------------------------------------
+    # update_frame — readouts
+    # ------------------------------------------------------------------
+
+    def test_update_frame_updates_position_label(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(pos=42.5))
+        assert "42.50" in tab._lbl_pos.text()
+
+    def test_update_frame_updates_state_label(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(state="PAUSED"))
+        assert tab._lbl_state.text() == "PAUSED"
+
+    def test_update_frame_updates_phase_label(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(phase="DWELL_BOTTOM"))
+        assert "DWELL BOTTOM" in tab._lbl_phase.text()
+
+    def test_update_frame_updates_vel_labels(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(vel_act=3.5, vel_cmd=4.0))
+        assert "3.50" in tab._lbl_vel_act.text()
+        assert "4.00" in tab._lbl_vel_cmd.text()
+
+    # ------------------------------------------------------------------
+    # Auto-record — state-machine transitions
+    # ------------------------------------------------------------------
+
+    def test_auto_record_starts_on_running(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert not tab._recorder.is_recording
+        tab.update_frame(_make_frame(state="READY"))
+        tab.update_frame(_make_frame(state="RUNNING"))
+        assert tab._recorder.is_recording
+
+    def test_auto_record_stops_on_leaving_running(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(state="RUNNING"))
+        assert tab._recorder.is_recording
+        tab.update_frame(_make_frame(state="READY"))
+        assert not tab._recorder.is_recording
+
+    def test_auto_record_saves_csv(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.notify_profile_name("test_profile")
+        tab.update_frame(_make_frame(state="RUNNING", ts=1000))
+        tab.update_frame(_make_frame(state="RUNNING", ts=1100))
+        tab.update_frame(_make_frame(state="READY",   ts=1200))
+        csv_files = list(tmp_path.glob("*.csv"))
+        assert len(csv_files) == 1
+        assert "test_profile" in csv_files[0].name
+
+    def test_auto_record_off_does_not_start_on_running(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._chk_auto.setChecked(False)
+        tab.update_frame(_make_frame(state="RUNNING"))
+        assert not tab._recorder.is_recording
+
+    def test_record_button_reflects_recording_state(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(state="RUNNING"))
+        assert tab._btn_record.isChecked()
+        tab.update_frame(_make_frame(state="READY"))
+        assert not tab._btn_record.isChecked()
+
+    def test_frame_count_label_increments(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.update_frame(_make_frame(state="RUNNING", ts=1000))
+        tab.update_frame(_make_frame(state="RUNNING", ts=1100))
+        assert tab._lbl_frames.text() == "2"
+
+    # ------------------------------------------------------------------
+    # notify_profile_name
+    # ------------------------------------------------------------------
+
+    def test_notify_profile_name_updates_name(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.notify_profile_name("my_profile")
+        assert tab._profile_name == "my_profile"
+
+    def test_notify_empty_name_falls_back_to_unnamed(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.notify_profile_name("")
+        assert tab._profile_name == "unnamed"
+
+    # ------------------------------------------------------------------
+    # Telem rate
+    # ------------------------------------------------------------------
+
+    def test_set_rate_calls_ci(self, qtbot, tmp_path):
+        ci = _make_ci()
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.set_command_interface(ci)
+        tab._spin_rate.setValue(20)
+        tab._on_set_rate()
+        ci.set_telem_rate.assert_called_once_with(20)
+
+    def test_set_rate_does_nothing_without_ci(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._on_set_rate()   # must not raise
+
+    # ------------------------------------------------------------------
+    # Manual record toggle
+    # ------------------------------------------------------------------
+
+    def test_manual_record_start(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._on_record_toggled(True)
+        assert tab._recorder.is_recording
+
+    def test_manual_record_stop_saves_csv(self, qtbot, tmp_path):
+        tab = TelemetryTab(log_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab.notify_profile_name("manual_test")
+        tab._on_record_toggled(True)
+        tab.update_frame(_make_frame(state="READY", ts=500))
+        tab._on_record_toggled(False)
+        assert not tab._recorder.is_recording
+
+
+# ===========================================================================
+# TestProfileManagerTab
+# ===========================================================================
+
+from ui.tabs.profile_manager_tab import ProfileManagerTab, _NewProfileDialog  # noqa: E402
+
+
+def _save_profile_to(p: DipProfile, directory: Path) -> Path:
+    """Helper: save a DipProfile to directory and return its path."""
+    from core.profile import save_profile as _save
+    safe = p.name.strip().replace(" ", "_")
+    path = directory / f"{safe}.json"
+    _save(p, path)
+    return path
+
+
+class TestProfileManagerTab:
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
+    def test_creates_without_error(self, qtbot, tmp_path):
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+
+    def test_empty_dir_shows_zero_rows(self, qtbot, tmp_path):
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert tab._table.rowCount() == 0
+
+    def test_profiles_dir_created_if_missing(self, qtbot, tmp_path):
+        new_dir = tmp_path / "subdir" / "profiles"
+        assert not new_dir.exists()
+        tab = ProfileManagerTab(profile_dir=new_dir)
+        qtbot.addWidget(tab)
+        assert new_dir.exists()
+
+    # ------------------------------------------------------------------
+    # refresh — loading profiles
+    # ------------------------------------------------------------------
+
+    def test_refresh_populates_table(self, qtbot, tmp_path):
+        _save_profile_to(_make_profile("alpha"), tmp_path)
+        _save_profile_to(_make_profile("beta"), tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert tab._table.rowCount() == 2
+
+    def test_refresh_shows_profile_name_in_first_column(self, qtbot, tmp_path):
+        _save_profile_to(_make_profile("silica"), tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert tab._table.item(0, 0).text() == "silica"
+
+    def test_set_profile_dir_reloads(self, qtbot, tmp_path):
+        dir_a = tmp_path / "a"
+        dir_a.mkdir()
+        dir_b = tmp_path / "b"
+        dir_b.mkdir()
+        _save_profile_to(_make_profile("prof_a"), dir_a)
+        _save_profile_to(_make_profile("prof_b"), dir_b)
+        tab = ProfileManagerTab(profile_dir=dir_a)
+        qtbot.addWidget(tab)
+        assert tab._table.rowCount() == 1
+        tab.set_profile_dir(dir_b)
+        assert tab._table.rowCount() == 1
+        assert tab._table.item(0, 0).text() == "prof_b"
+
+    # ------------------------------------------------------------------
+    # Selection — button enable states
+    # ------------------------------------------------------------------
+
+    def test_buttons_disabled_when_no_selection(self, qtbot, tmp_path):
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        assert not tab._btn_duplicate.isEnabled()
+        assert not tab._btn_rename.isEnabled()
+        assert not tab._btn_delete.isEnabled()
+        assert not tab._btn_load.isEnabled()
+
+    def test_buttons_enabled_after_selection(self, qtbot, tmp_path):
+        _save_profile_to(_make_profile("myprofile"), tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        assert tab._btn_duplicate.isEnabled()
+        assert tab._btn_rename.isEnabled()
+        assert tab._btn_delete.isEnabled()
+        assert tab._btn_load.isEnabled()
+
+    # ------------------------------------------------------------------
+    # Load — emits signal
+    # ------------------------------------------------------------------
+
+    def test_load_emits_profile_selected(self, qtbot, tmp_path):
+        p = _make_profile("loadme")
+        _save_profile_to(p, tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+
+        emitted = []
+        tab.profile_selected.connect(lambda prof: emitted.append(prof))
+        tab._on_load()
+
+        assert len(emitted) == 1
+        assert emitted[0].name == "loadme"
+
+    def test_load_does_nothing_without_selection(self, qtbot, tmp_path):
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        emitted = []
+        tab.profile_selected.connect(lambda p: emitted.append(p))
+        tab._on_load()
+        assert emitted == []
+
+    # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    def test_delete_removes_file_and_row(self, qtbot, tmp_path, monkeypatch):
+        p = _make_profile("todelete")
+        path = _save_profile_to(p, tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        # Auto-confirm the dialog
+        monkeypatch.setattr(
+            "ui.tabs.profile_manager_tab.QMessageBox.question",
+            lambda *args, **kwargs: __import__("PyQt6.QtWidgets", fromlist=["QMessageBox"]).QMessageBox.StandardButton.Yes,
+        )
+        tab._on_delete()
+        assert not path.exists()
+        assert tab._table.rowCount() == 0
+
+    def test_delete_does_nothing_without_selection(self, qtbot, tmp_path):
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._on_delete()   # must not raise
+
+    # ------------------------------------------------------------------
+    # Duplicate
+    # ------------------------------------------------------------------
+
+    def test_duplicate_creates_new_file(self, qtbot, tmp_path, monkeypatch):
+        p = _make_profile("original")
+        _save_profile_to(p, tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        monkeypatch.setattr(
+            "ui.tabs.profile_manager_tab._ask_name",
+            lambda *args, **kwargs: ("original_copy", True),
+        )
+        tab._on_duplicate()
+        assert (tmp_path / "original_copy.json").exists()
+        assert tab._table.rowCount() == 2
+
+    def test_duplicate_preserves_parameters(self, qtbot, tmp_path, monkeypatch):
+        p = _make_profile("orig2")
+        _save_profile_to(p, tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        monkeypatch.setattr(
+            "ui.tabs.profile_manager_tab._ask_name",
+            lambda *args, **kwargs: ("orig2_dup", True),
+        )
+        tab._on_duplicate()
+        from core.profile import load_profile as _load
+        loaded = _load(tmp_path / "orig2_dup.json")
+        assert loaded.dip_speed_mm_s == p.dip_speed_mm_s
+        assert loaded.dip_depth_mm == p.dip_depth_mm
+
+    # ------------------------------------------------------------------
+    # Rename
+    # ------------------------------------------------------------------
+
+    def test_rename_moves_file(self, qtbot, tmp_path, monkeypatch):
+        p = _make_profile("oldname")
+        old_path = _save_profile_to(p, tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        monkeypatch.setattr(
+            "ui.tabs.profile_manager_tab._ask_name",
+            lambda *args, **kwargs: ("newname", True),
+        )
+        tab._on_rename()
+        assert not old_path.exists()
+        assert (tmp_path / "newname.json").exists()
+
+    def test_rename_updates_table(self, qtbot, tmp_path, monkeypatch):
+        _save_profile_to(_make_profile("before"), tmp_path)
+        tab = ProfileManagerTab(profile_dir=tmp_path)
+        qtbot.addWidget(tab)
+        tab._table.selectRow(0)
+        monkeypatch.setattr(
+            "ui.tabs.profile_manager_tab._ask_name",
+            lambda *args, **kwargs: ("after", True),
+        )
+        tab._on_rename()
+        assert tab._table.item(0, 0).text() == "after"
+
+    # ------------------------------------------------------------------
+    # _NewProfileDialog
+    # ------------------------------------------------------------------
+
+    def test_new_profile_dialog_default_values(self, qtbot):
+        dlg = _NewProfileDialog()
+        qtbot.addWidget(dlg)
+        assert dlg._dip_spd.value() == 5.0
+        assert dlg._n_dips.value() == 1
+
+    def test_new_profile_dialog_get_profile_empty_name_raises(self, qtbot):
+        dlg = _NewProfileDialog()
+        qtbot.addWidget(dlg)
+        dlg._name.setText("   ")
+        with pytest.raises(ValueError):
+            dlg.get_profile()
