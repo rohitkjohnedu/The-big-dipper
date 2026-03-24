@@ -943,3 +943,26 @@ class TestProfileManagerTab:
         dlg._name.setText("   ")
         with pytest.raises(ValueError):
             dlg.get_profile()
+
+
+# ===========================================================================
+# TestProfileEditorTab
+# ===========================================================================
+
+from ui.tabs.profile_editor_tab import ProfileEditorTab  # noqa: E402
+
+
+class TestProfileEditorTab:
+
+    def test_creates_without_error(self, qtbot):
+        tab = ProfileEditorTab()
+        qtbot.addWidget(tab)
+
+    def test_shows_not_implemented_message(self, qtbot):
+        tab = ProfileEditorTab()
+        qtbot.addWidget(tab)
+        # Find the label and verify it mentions the stub status
+        from PyQt6.QtWidgets import QLabel
+        labels = tab.findChildren(QLabel)
+        texts = [lbl.text() for lbl in labels]
+        assert any("not yet implemented" in t.lower() for t in texts)
