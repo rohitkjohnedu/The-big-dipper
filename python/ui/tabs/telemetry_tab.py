@@ -244,11 +244,15 @@ class TelemetryTab(QWidget):
 
     def _update_readouts(self, frame: TelemetryFrame) -> None:
         import math
-        # Firmware reports vel_commanded as unsigned magnitude; copy sign from
-        # vel_actual (encoder-derived, already signed) so the readout shows
-        # negative values during downward motion.
-        vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s) \
-                  if frame.vel_actual_mm_s != 0.0 else frame.vel_commanded_mm_s
+        # Firmware reports vel_commanded as unsigned magnitude and may not zero
+        # it during dwell phases.  If the motor is not actually moving (encoder
+        # below noise floor), show commanded as 0.  Otherwise copy the sign of
+        # vel_actual (encoder-derived, already signed) onto vel_commanded.
+        _VEL_NOISE_MM_S = 0.5
+        if abs(frame.vel_actual_mm_s) < _VEL_NOISE_MM_S:
+            vel_cmd = 0.0
+        else:
+            vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s)
         self._lbl_pos.setText(f"{frame.pos_mm:.2f}")
         self._lbl_vel_act.setText(f"{frame.vel_actual_mm_s:.2f}")
         self._lbl_vel_cmd.setText(f"{vel_cmd:.2f}")

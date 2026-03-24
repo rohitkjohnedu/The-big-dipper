@@ -136,11 +136,15 @@ class LivePlot(QWidget):
         t_s: float = (frame.timestamp_ms - self._t0) / 1000.0
 
         import math
-        # Firmware reports vel_commanded as unsigned magnitude; copy the sign
-        # from vel_actual (encoder-derived, already signed) so the plot shows
-        # negative values during downward motion.
-        vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s) \
-                  if frame.vel_actual_mm_s != 0.0 else frame.vel_commanded_mm_s
+        # Firmware reports vel_commanded as unsigned magnitude and may not zero
+        # it during dwell phases.  If the motor is not actually moving (encoder
+        # below noise floor), show commanded as 0.  Otherwise copy the sign of
+        # vel_actual (encoder-derived, already signed) onto vel_commanded.
+        _VEL_NOISE_MM_S = 0.5
+        if abs(frame.vel_actual_mm_s) < _VEL_NOISE_MM_S:
+            vel_cmd = 0.0
+        else:
+            vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s)
 
         # Rolling buffers
         self._t.append(t_s)
