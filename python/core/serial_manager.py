@@ -119,6 +119,10 @@ class SerialManager:
         # so a large backlog here indicates a protocol error.
         self.telem_queue:    queue.Queue[TelemetryFrame] = queue.Queue(maxsize=1000)
         self.response_queue: queue.Queue[str]            = queue.Queue(maxsize=200)
+        # raw_queue receives a copy of every TX command and RX line as plain
+        # strings ("TX CMD HOME", "RX ACK HOME", "RX TELEM,...") for the
+        # serial monitor tab.
+        self.raw_queue:      queue.Queue[str]            = queue.Queue(maxsize=2000)
 
     # -------------------------------------------------------------------------
     # Lifecycle
@@ -220,6 +224,12 @@ class SerialManager:
         if not cmd.endswith("\n"):
             cmd += "\n"
 
+        # Log every outgoing command to raw_queue for the serial monitor.
+        try:
+            self.raw_queue.put_nowait(f"TX {cmd.strip()}")
+        except queue.Full:
+            pass
+
         with self._write_lock:
             if self._serial is not None and self._serial.is_open:
                 try:
@@ -301,6 +311,12 @@ class SerialManager:
                 continue
 
             log.debug("RX ← %r", line)
+
+            # Mirror every received line to raw_queue for the serial monitor.
+            try:
+                self.raw_queue.put_nowait(f"RX {line}")
+            except queue.Full:
+                pass
 
             # --- Route to the appropriate queue ------------------------------
             if line.startswith("TELEM,"):

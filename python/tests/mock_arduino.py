@@ -156,6 +156,10 @@ class MockArduino:
         # ---- Public queues (same interface as SerialManager) ----------------
         self.telem_queue:    queue.Queue[TelemetryFrame] = queue.Queue(maxsize=1000)
         self.response_queue: queue.Queue[str]            = queue.Queue(maxsize=200)
+        # raw_queue receives a copy of every TX command and RX line as plain
+        # strings ("TX CMD HOME", "RX ACK HOME", "RX TELEM,...") for the
+        # serial monitor tab.
+        self.raw_queue:      queue.Queue[str]            = queue.Queue(maxsize=2000)
 
         # ---- Internal state -------------------------------------------------
         self._lock:  threading.Lock = threading.Lock()
@@ -229,6 +233,12 @@ class MockArduino:
             cmd: Raw command string, e.g. ``"CMD HOME\\n"``.
         """
         cmd    = cmd.strip()
+        # Log every outgoing command to raw_queue for the serial monitor.
+        try:
+            self.raw_queue.put_nowait(f"TX {cmd}")
+        except queue.Full:
+            pass
+
         tokens = cmd.split()
         if not tokens or tokens[0] != "CMD":
             return
@@ -241,6 +251,11 @@ class MockArduino:
 
         if response is not None:
             self.response_queue.put(response)
+            # Mirror response to raw_queue.
+            try:
+                self.raw_queue.put_nowait(f"RX {response}")
+            except queue.Full:
+                pass
 
     # -------------------------------------------------------------------------
     # Command dispatch
@@ -588,6 +603,17 @@ class MockArduino:
                     self.telem_queue.put_nowait(frame)
                 except queue.Full:
                     pass   # drop on full — same behaviour as real firmware
+                # Mirror raw TELEM string to raw_queue for the serial monitor.
+                raw_telem = (
+                    f"RX TELEM,{frame.timestamp_ms},"
+                    f"{frame.pos_mm:.3f},{frame.vel_actual_mm_s:.2f},"
+                    f"{frame.vel_commanded_mm_s:.2f},{frame.accel_mm_s2:.2f},"
+                    f"{frame.state},{frame.phase}"
+                )
+                try:
+                    self.raw_queue.put_nowait(raw_telem)
+                except queue.Full:
+                    pass
 
             time.sleep(0.01)   # 100 Hz internal poll
 
