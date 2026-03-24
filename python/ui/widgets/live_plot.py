@@ -42,6 +42,7 @@ main thread before calling these methods.
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from typing import Final
 
@@ -116,6 +117,12 @@ class LivePlot(QWidget):
 
         self._t0: float | None = None   # timestamp_ms of the first frame (x=0)
 
+        # --- Derived-signal state -----------------------------------------
+        self._prev_t_ms:      float | None = None
+        self._prev_vel_actual: float | None = None
+        self._accel_ema:      float        = 0.0   # EMA-smoothed dv/dt
+        self._vel_cmd_display: float       = 0.0   # ramped commanded vel
+
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -135,36 +142,67 @@ class LivePlot(QWidget):
 
         t_s: float = (frame.timestamp_ms - self._t0) / 1000.0
 
-        import math
-        # Firmware reports vel_commanded as unsigned magnitude and may not zero
-        # it during dwell phases.  If the motor is not actually moving (encoder
-        # below noise floor), show commanded as 0.  Otherwise copy the sign of
-        # vel_actual (encoder-derived, already signed) onto vel_commanded.
-        _VEL_NOISE_MM_S = 0.5
-        if abs(frame.vel_actual_mm_s) < _VEL_NOISE_MM_S:
-            vel_cmd = 0.0
+        # --- dt from previous frame ----------------------------------------
+        dt = (frame.timestamp_ms - self._prev_t_ms) / 1000.0 \
+             if self._prev_t_ms is not None else 0.0
+
+        vel_actual = frame.vel_actual_mm_s
+
+        # --- Noise floor: show commanded=0 when motor is stationary ---------
+        # Firmware keeps last segment speed in vel_commanded during dwells.
+        _VEL_NOISE = 0.5  # mm/s
+        if abs(vel_actual) < _VEL_NOISE:
+            vel_cmd_target = 0.0
         else:
-            vel_cmd = math.copysign(frame.vel_commanded_mm_s, frame.vel_actual_mm_s)
+            vel_cmd_target = math.copysign(frame.vel_commanded_mm_s, vel_actual)
+
+        # --- EMA-smoothed acceleration from encoder velocity derivative ------
+        if dt > 1e-6 and self._prev_vel_actual is not None:
+            raw_accel = (vel_actual - self._prev_vel_actual) / dt
+            self._accel_ema = 0.25 * raw_accel + 0.75 * self._accel_ema
+
+        # --- Ramp vel_cmd_display toward target at accel rate ----------------
+        # On the very first frame dt=0 — leave _vel_cmd_display at 0 so the
+        # ramp engages from the next real frame interval.
+        _MIN_RAMP_RATE = 20.0  # mm/s² minimum ramp rate when accel_ema ≈ 0
+        if dt > 1e-6:
+            ramp_rate = max(abs(self._accel_ema), _MIN_RAMP_RATE)
+            delta     = vel_cmd_target - self._vel_cmd_display
+            max_step  = ramp_rate * dt
+            if abs(delta) <= max_step:
+                self._vel_cmd_display = vel_cmd_target
+            else:
+                self._vel_cmd_display += math.copysign(max_step, delta)
+
+        vel_cmd   = self._vel_cmd_display
+        accel_out = self._accel_ema
+
+        self._prev_t_ms       = frame.timestamp_ms
+        self._prev_vel_actual = vel_actual
 
         # Rolling buffers
         self._t.append(t_s)
         self._pos.append(frame.pos_mm)
         self._vel_cmd.append(vel_cmd)
-        self._vel_act.append(frame.vel_actual_mm_s)
-        self._accel.append(frame.accel_mm_s2)
+        self._vel_act.append(vel_actual)
+        self._accel.append(accel_out)
 
         # Full-history buffers
         self._all_t.append(t_s)
         self._all_pos.append(frame.pos_mm)
         self._all_vel_cmd.append(vel_cmd)
-        self._all_vel_act.append(frame.vel_actual_mm_s)
-        self._all_accel.append(frame.accel_mm_s2)
+        self._all_vel_act.append(vel_actual)
+        self._all_accel.append(accel_out)
 
         self._redraw()
 
     def clear(self) -> None:
         """Reset all buffers and blank the plot (call between runs)."""
         self._t0 = None
+        self._prev_t_ms       = None
+        self._prev_vel_actual = None
+        self._accel_ema       = 0.0
+        self._vel_cmd_display = 0.0
         self._t.clear()
         self._pos.clear()
         self._vel_cmd.clear()
@@ -176,6 +214,16 @@ class LivePlot(QWidget):
         self._all_vel_act.clear()
         self._all_accel.clear()
         self._redraw()
+
+    @property
+    def last_accel_computed(self) -> float:
+        """Most recent EMA-smoothed acceleration (mm/s²), derived from encoder velocity."""
+        return self._accel_ema
+
+    @property
+    def last_vel_cmd_ramped(self) -> float:
+        """Most recent ramped commanded velocity (mm/s) for display in readouts."""
+        return self._vel_cmd_display
 
     # ------------------------------------------------------------------
     # Private — UI construction
