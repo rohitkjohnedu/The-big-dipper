@@ -1,0 +1,269 @@
+"""
+ui/main_window.py
+=================
+
+Top-level application window — assembles all tabs and owns the hardware
+connection lifecycle.
+
+Layout
+------
+::
+
+    ┌──────────────────────────────────────────────────────────────┐
+    │  [EMERGENCY STOP]                                            │  ← toolbar
+    ├──────────────────────────────────────────────────────────────┤
+    │  Control │ Serial Monitor │ Telemetry │ Profiles │ Editor   │  ← tabs
+    │                                                              │
+    │                    (tab content)                             │
+    │                                                              │
+    ├──────────────────────────────────────────────────────────────┤
+    │  ● COM4   READY   NONE   00:00.0                            │  ← status bar
+    └──────────────────────────────────────────────────────────────┘
+
+Connection lifecycle
+--------------------
+``MainWindow`` owns the ``SerialManager``.
+
+* **Connect** — ``ControlTab`` emits ``connect_requested(port, baud)``.
+  ``MainWindow`` creates a ``SerialManager``, starts it, builds a
+  ``CommandInterface``, and broadcasts it to every tab.
+
+* **Disconnect** — ``ControlTab`` emits ``disconnect_requested``.
+  ``MainWindow`` stops the manager, sets ``_manager`` and ``_ci`` to
+  ``None``, and broadcasts ``None`` to every tab so they disable their
+  hardware controls.
+
+* **closeEvent** — tears down any active connection before the window
+  closes.
+
+Telemetry fan-out
+-----------------
+A single 20 Hz ``QTimer`` drains ``manager.telem_queue`` and delivers each
+:class:`~core.telemetry_parser.TelemetryFrame` to:
+
+* ``TelemetryTab.update_frame``
+* ``StatusBar.update_frame``
+* ``ControlTab.update_state``
+
+Public API (used by ``main.py``)::
+
+    win = MainWindow(profile_dir="profiles", log_dir="logs")
+    win.show()
+"""
+
+from __future__ import annotations
+
+import logging
+import queue
+from pathlib import Path
+from typing import Final, Optional
+
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import (
+    QHBoxLayout, QMainWindow, QMessageBox,
+    QTabWidget, QVBoxLayout, QWidget,
+)
+
+from core.command_interface import CommandInterface
+from core.profile import DipProfile, list_profiles
+from core.serial_manager import SerialManager
+from ui.tabs.control_tab import ControlTab
+from ui.tabs.profile_editor_tab import ProfileEditorTab
+from ui.tabs.profile_manager_tab import ProfileManagerTab
+from ui.tabs.serial_monitor_tab import SerialMonitorTab
+from ui.tabs.telemetry_tab import TelemetryTab
+from ui.widgets.estop_button import EstopButton
+from ui.widgets.status_bar import StatusBar
+
+log: Final[logging.Logger] = logging.getLogger(__name__)
+
+
+class MainWindow(QMainWindow):
+    """
+    Top-level application window.
+
+    Args:
+        profile_dir: Path to the ``profiles/`` directory.  Created if absent.
+        log_dir:     Path to the ``logs/`` directory for CSV files.
+        parent:      Optional parent widget.
+    """
+
+    def __init__(
+        self,
+        profile_dir: str | Path = "profiles",
+        log_dir:     str | Path = "logs",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+
+        self._profile_dir = Path(profile_dir)
+        self._log_dir     = Path(log_dir)
+        self._manager:    Optional[SerialManager]    = None
+        self._ci:         Optional[CommandInterface] = None
+
+        self._build_ui()
+        self._load_initial_profiles()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get_tab_control(self)  -> ControlTab:       return self._tab_control
+    def get_tab_serial(self)   -> SerialMonitorTab:  return self._tab_serial
+    def get_tab_telem(self)    -> TelemetryTab:      return self._tab_telem
+    def get_tab_profiles(self) -> ProfileManagerTab: return self._tab_profiles
+    def get_tab_editor(self)   -> ProfileEditorTab:  return self._tab_editor
+
+    # ------------------------------------------------------------------
+    # Private — UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        self.setWindowTitle("Dip Coater Control")
+        self.resize(1100, 800)
+        self.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
+
+        # --- Tabs ----------------------------------------------------------
+        self._tab_control  = ControlTab()
+        self._tab_serial   = SerialMonitorTab()
+        self._tab_telem    = TelemetryTab(log_dir=self._log_dir)
+        self._tab_profiles = ProfileManagerTab(profile_dir=self._profile_dir)
+        self._tab_editor   = ProfileEditorTab()
+
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._tab_control,  "Control")
+        self._tabs.addTab(self._tab_serial,   "Serial Monitor")
+        self._tabs.addTab(self._tab_telem,    "Telemetry")
+        self._tabs.addTab(self._tab_profiles, "Profiles")
+        self._tabs.addTab(self._tab_editor,   "Profile Editor")
+
+        # --- ESTOP ---------------------------------------------------------
+        self._estop = EstopButton(command_interface=None)   # updated on connect
+        self._estop.setFixedHeight(52)
+
+        # --- Status bar widget (inside central widget, above Qt status bar) -
+        self._status = StatusBar()
+
+        # --- Toolbar row ---------------------------------------------------
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(4, 4, 4, 0)
+        toolbar_layout.setSpacing(8)
+        toolbar_layout.addWidget(self._estop)
+        toolbar_layout.addStretch()
+
+        # --- Central widget ------------------------------------------------
+        central = QWidget()
+        layout  = QVBoxLayout(central)
+        layout.setContentsMargins(6, 6, 6, 4)
+        layout.setSpacing(4)
+        layout.addWidget(toolbar)
+        layout.addWidget(self._tabs, stretch=1)
+        layout.addWidget(self._status)
+        self.setCentralWidget(central)
+
+        # --- Signal wiring -------------------------------------------------
+        self._tab_control.connect_requested.connect(self._on_connect)
+        self._tab_control.disconnect_requested.connect(self._on_disconnect)
+        self._tab_profiles.profile_selected.connect(self._on_profile_selected)
+
+        # --- 20 Hz telemetry poll timer ------------------------------------
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(50)
+        self._poll_timer.timeout.connect(self._poll_telem)
+        self._poll_timer.start()
+
+    # ------------------------------------------------------------------
+    # Private — connection lifecycle
+    # ------------------------------------------------------------------
+
+    def _on_connect(self, port: str, baud: int) -> None:
+        """Open the serial port and wire up all tabs."""
+        if self._manager is not None:
+            self._teardown_connection()
+
+        manager = SerialManager(port=port, baud=baud)
+        try:
+            manager.start()
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Connection failed",
+                f"Could not open {port} at {baud} baud:\n{exc}\n\n"
+                "Check:\n"
+                "  • Port name is correct\n"
+                "  • Arduino IDE Serial Monitor is closed\n"
+                "  • Arduino is powered and connected",
+            )
+            return
+
+        self._manager = manager
+        self._ci      = CommandInterface(self._manager)
+
+        self._broadcast_ci(self._ci)
+        self._status.set_connected(True, port)
+        log.info("connected: %s @ %d baud", port, baud)
+
+    def _on_disconnect(self) -> None:
+        """Close the serial port and clear all tabs."""
+        self._teardown_connection()
+        log.info("disconnected")
+
+    def _teardown_connection(self) -> None:
+        """Stop the manager and push None to all tabs."""
+        if self._manager is not None:
+            self._manager.stop()
+            self._manager = None
+        self._ci = None
+        self._broadcast_ci(None)
+        self._status.set_connected(False)
+
+    def _broadcast_ci(self, ci: Optional[CommandInterface]) -> None:
+        """Push a CommandInterface (or None) to every tab that needs one."""
+        self._tab_control.set_command_interface(ci)
+        self._tab_telem.set_command_interface(ci)
+        self._tab_serial.set_manager(self._manager)           # type: ignore[arg-type]
+        self._estop._ci = ci                                   # update ESTOP target
+
+    # ------------------------------------------------------------------
+    # Private — profile selection
+    # ------------------------------------------------------------------
+
+    def _on_profile_selected(self, profile: DipProfile) -> None:
+        """Forward a profile from ProfileManagerTab to ControlTab."""
+        self._tab_control.set_profiles([profile])
+        self._tab_telem.notify_profile_name(profile.name)
+        # Switch to the Control tab so the operator can immediately run it.
+        self._tabs.setCurrentWidget(self._tab_control)
+        log.info("profile selected: %s", profile.name)
+
+    def _load_initial_profiles(self) -> None:
+        """Populate ControlTab with any profiles already on disk at startup."""
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
+        profiles = list_profiles(self._profile_dir)
+        if profiles:
+            self._tab_control.set_profiles(profiles)
+
+    # ------------------------------------------------------------------
+    # Private — telemetry fan-out
+    # ------------------------------------------------------------------
+
+    def _poll_telem(self) -> None:
+        if self._manager is None:
+            return
+        while True:
+            try:
+                frame = self._manager.telem_queue.get_nowait()
+                self._tab_telem.update_frame(frame)
+                self._status.update_frame(frame)
+                self._tab_control.update_state(frame.state)
+            except queue.Empty:
+                break
+
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        self._poll_timer.stop()
+        self._teardown_connection()
+        super().closeEvent(event)
