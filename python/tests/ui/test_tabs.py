@@ -141,8 +141,8 @@ class TestControlTab:
     @pytest.mark.parametrize("state,expected_stop", [
         ("RUNNING", True),
         ("PAUSED",  True),
+        ("READY",   True),   # Stop also available in READY to end a jog
         ("IDLE",    False),
-        ("READY",   False),
         ("ERROR",   False),
     ])
     def test_stop_enabled_only_in_correct_states(self, qtbot, state, expected_stop):
@@ -268,8 +268,9 @@ class TestControlTab:
         tab.set_command_interface(ci)
         tab.update_state("READY")
         tab._spin_jog_spd.setValue(3.5)
-        tab._btn_jog_up.click()
-        ci.jog.assert_called_once_with("UP", 3.5)
+        tab._spin_jog_accel.setValue(25.0)
+        tab._on_jog_up_pressed()
+        ci.jog.assert_called_once_with("UP", 3.5, 25.0)
 
     def test_jog_down_calls_ci_jog(self, qtbot):
         ci = _make_ci()
@@ -278,8 +279,23 @@ class TestControlTab:
         tab.set_command_interface(ci)
         tab.update_state("READY")
         tab._spin_jog_spd.setValue(2.0)
-        tab._btn_jog_down.click()
-        ci.jog.assert_called_once_with("DOWN", 2.0)
+        tab._spin_jog_accel.setValue(20.0)
+        tab._on_jog_down_pressed()
+        ci.jog.assert_called_once_with("DOWN", 2.0, 20.0)
+
+    def test_jog_released_calls_stop(self, qtbot):
+        ci = _make_ci()
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        tab.set_command_interface(ci)
+        tab.update_state("READY")
+        tab._on_jog_released()
+        ci.stop.assert_called_once()
+
+    def test_jog_accel_spinbox_default(self, qtbot):
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        assert tab._spin_jog_accel.value() == 20.0
 
     def test_pause_calls_ci_pause(self, qtbot):
         ci = _make_ci()

@@ -11,9 +11,10 @@ Three collapsible groups:
   so ``MainWindow`` can open or close the serial port without the tab
   needing to own a ``SerialManager``.
 
-* **Manual Control** — Home, Stop, Jog UP / Jog DOWN with a speed
-  spinbox.  Button states mirror the Arduino state machine: Jog is only
-  enabled in ``READY``, Stop only in ``RUNNING`` or ``PAUSED``, etc.
+* **Manual Control** — Jog pad widget with arc-shaped UP / DOWN buttons,
+  a circular Home button, and a Stop button.  Jog buttons are
+  press-and-hold: the motor moves while the button is held and stops when
+  it is released.  Speed and acceleration spinboxes sit below the pad.
 
 * **Run Profile** — ``QComboBox`` of loaded profiles, Run / Pause /
   Resume buttons.  ``Run`` spawns a :class:`_RunWorker` ``QThread`` so
@@ -187,44 +188,151 @@ class ControlTab(QWidget):
 
     def _build_manual_group(self) -> QGroupBox:
         grp = QGroupBox("Manual Control")
-        layout = QVBoxLayout(grp)
-        layout.setSpacing(6)
+        outer = QVBoxLayout(grp)
+        outer.setSpacing(8)
+        outer.addWidget(self._build_jog_pad())
+        outer.addLayout(self._build_jog_params())
+        return grp
 
-        # Home / Stop
-        row_hs = QHBoxLayout()
-        self._btn_home = QPushButton("Home")
-        self._btn_home.setToolTip("Drive to bottom endstop and zero position (IDLE / READY / ERROR)")
-        self._btn_stop = QPushButton("Stop")
-        self._btn_stop.setToolTip("Decelerated stop — motor halts gracefully (RUNNING / PAUSED)")
+    def _build_jog_pad(self) -> QWidget:
+        """Circular jog pad: UP arc (top), HOME circle (centre), DOWN arc (bottom), STOP (right)."""
+        pad = QWidget()
+
+        # --- Buttons -------------------------------------------------------
+        self._btn_jog_up = QPushButton("↑")
+        self._btn_jog_up.setToolTip(
+            "Jog UP — hold to move, release to stop  (READY only)"
+        )
+        self._btn_jog_up.pressed.connect(self._on_jog_up_pressed)
+        self._btn_jog_up.released.connect(self._on_jog_released)
+        self._btn_jog_up.setStyleSheet(
+            "QPushButton {"
+            "  border-top-left-radius: 52px;"
+            "  border-top-right-radius: 52px;"
+            "  border-bottom-left-radius: 6px;"
+            "  border-bottom-right-radius: 6px;"
+            "  min-width: 130px; min-height: 54px;"
+            "  font-size: 20pt; font-weight: bold;"
+            "  background-color: #1565c0; color: white;"
+            "}"
+            "QPushButton:pressed { background-color: #0d47a1; }"
+            "QPushButton:disabled { background-color: #444; color: #777; }"
+        )
+
+        self._btn_home = QPushButton("⌂")
+        self._btn_home.setToolTip(
+            "Home — drive to top endstop and zero position  (IDLE / READY / ERROR)"
+        )
         self._btn_home.clicked.connect(self._on_home)
-        self._btn_stop.clicked.connect(self._on_stop)
-        row_hs.addWidget(self._btn_home)
-        row_hs.addWidget(self._btn_stop)
-        row_hs.addStretch()
+        self._btn_home.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 42px;"
+            "  min-width: 84px; max-width: 84px;"
+            "  min-height: 84px; max-height: 84px;"
+            "  font-size: 22pt;"
+            "  background-color: #2e7d32; color: white;"
+            "}"
+            "QPushButton:pressed { background-color: #1b5e20; }"
+            "QPushButton:disabled { background-color: #444; color: #777; }"
+        )
 
-        # Jog
-        row_jog = QHBoxLayout()
-        self._btn_jog_up   = QPushButton("Jog UP")
-        self._btn_jog_down = QPushButton("Jog DOWN")
+        self._btn_jog_down = QPushButton("↓")
+        self._btn_jog_down.setToolTip(
+            "Jog DOWN — hold to move, release to stop  (READY only)"
+        )
+        self._btn_jog_down.pressed.connect(self._on_jog_down_pressed)
+        self._btn_jog_down.released.connect(self._on_jog_released)
+        self._btn_jog_down.setStyleSheet(
+            "QPushButton {"
+            "  border-bottom-left-radius: 52px;"
+            "  border-bottom-right-radius: 52px;"
+            "  border-top-left-radius: 6px;"
+            "  border-top-right-radius: 6px;"
+            "  min-width: 130px; min-height: 54px;"
+            "  font-size: 20pt; font-weight: bold;"
+            "  background-color: #1565c0; color: white;"
+            "}"
+            "QPushButton:pressed { background-color: #0d47a1; }"
+            "QPushButton:disabled { background-color: #444; color: #777; }"
+        )
+
+        self._btn_stop = QPushButton("Stop")
+        self._btn_stop.setToolTip(
+            "Stop — decelerated halt  (RUNNING / PAUSED)"
+        )
+        self._btn_stop.clicked.connect(self._on_stop)
+        self._btn_stop.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 10px;"
+            "  min-width: 80px; max-width: 80px;"
+            "  min-height: 80px; max-height: 80px;"
+            "  font-size: 11pt; font-weight: bold;"
+            "  background-color: #b71c1c; color: white;"
+            "}"
+            "QPushButton:pressed { background-color: #7f0000; }"
+            "QPushButton:disabled { background-color: #444; color: #777; }"
+        )
+
+        # --- Layout --------------------------------------------------------
+        #       [ ↑  UP  ↑ ]
+        #   [⌂ HOME]  [Stop]
+        #       [ ↓ DOWN ↓ ]
+        layout = QVBoxLayout(pad)
+        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        row_up = QHBoxLayout()
+        row_up.addStretch()
+        row_up.addWidget(self._btn_jog_up)
+        row_up.addStretch()
+
+        row_mid = QHBoxLayout()
+        row_mid.setSpacing(16)
+        row_mid.addStretch()
+        row_mid.addWidget(self._btn_home)
+        row_mid.addStretch()
+        row_mid.addWidget(self._btn_stop)
+        row_mid.addStretch()
+
+        row_down = QHBoxLayout()
+        row_down.addStretch()
+        row_down.addWidget(self._btn_jog_down)
+        row_down.addStretch()
+
+        layout.addLayout(row_up)
+        layout.addLayout(row_mid)
+        layout.addLayout(row_down)
+        return pad
+
+    def _build_jog_params(self) -> QHBoxLayout:
+        """Speed and acceleration spinboxes shown below the jog pad."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
         self._spin_jog_spd = QDoubleSpinBox()
         self._spin_jog_spd.setRange(0.1, 50.0)
         self._spin_jog_spd.setValue(5.0)
         self._spin_jog_spd.setSuffix(" mm/s")
         self._spin_jog_spd.setDecimals(1)
-        self._spin_jog_spd.setFixedWidth(100)
-        self._btn_jog_up.setToolTip("Jog carriage upward — runs until Stop or ESTOP (READY only)")
-        self._btn_jog_down.setToolTip("Jog carriage downward — runs until Stop or ESTOP (READY only)")
-        self._btn_jog_up.clicked.connect(self._on_jog_up)
-        self._btn_jog_down.clicked.connect(self._on_jog_down)
-        row_jog.addWidget(self._btn_jog_up)
-        row_jog.addWidget(self._btn_jog_down)
-        row_jog.addWidget(QLabel("Speed:"))
-        row_jog.addWidget(self._spin_jog_spd)
-        row_jog.addStretch()
+        self._spin_jog_spd.setFixedWidth(110)
+        self._spin_jog_spd.setToolTip("Jog speed")
 
-        layout.addLayout(row_hs)
-        layout.addLayout(row_jog)
-        return grp
+        self._spin_jog_accel = QDoubleSpinBox()
+        self._spin_jog_accel.setRange(1.0, 500.0)
+        self._spin_jog_accel.setValue(20.0)
+        self._spin_jog_accel.setSuffix(" mm/s²")
+        self._spin_jog_accel.setDecimals(1)
+        self._spin_jog_accel.setFixedWidth(120)
+        self._spin_jog_accel.setToolTip("Jog acceleration")
+
+        row.addStretch()
+        row.addWidget(QLabel("Speed:"))
+        row.addWidget(self._spin_jog_spd)
+        row.addSpacing(12)
+        row.addWidget(QLabel("Accel:"))
+        row.addWidget(self._spin_jog_accel)
+        row.addStretch()
+        return row
 
     def _build_run_group(self) -> QGroupBox:
         grp = QGroupBox("Run Profile")
@@ -266,10 +374,11 @@ class ControlTab(QWidget):
         self._spin_baud.setEnabled(not connected)
 
         self._btn_home.setEnabled(connected and s in ("IDLE", "READY", "ERROR"))
-        self._btn_stop.setEnabled(connected and s in ("RUNNING", "PAUSED"))
+        self._btn_stop.setEnabled(connected and s in ("RUNNING", "PAUSED", "READY"))
 
-        self._btn_jog_up.setEnabled(connected   and s == "READY")
-        self._btn_jog_down.setEnabled(connected and s == "READY")
+        jog_ok = connected and s == "READY"
+        self._btn_jog_up.setEnabled(jog_ok)
+        self._btn_jog_down.setEnabled(jog_ok)
 
         has_profiles = len(self._profiles) > 0
         self._btn_run.setEnabled(connected    and s == "READY" and has_profiles)
@@ -306,21 +415,34 @@ class ControlTab(QWidget):
         except CommandError as exc:
             self._show_error("Stop failed", str(exc))
 
-    def _on_jog_up(self) -> None:
+    def _on_jog_up_pressed(self) -> None:
         if self._ci is None:
             return
         try:
-            self._ci.jog("UP", self._spin_jog_spd.value())
+            self._ci.jog("UP",
+                         self._spin_jog_spd.value(),
+                         self._spin_jog_accel.value())
         except CommandError as exc:
             self._show_error("Jog UP failed", str(exc))
 
-    def _on_jog_down(self) -> None:
+    def _on_jog_down_pressed(self) -> None:
         if self._ci is None:
             return
         try:
-            self._ci.jog("DOWN", self._spin_jog_spd.value())
+            self._ci.jog("DOWN",
+                         self._spin_jog_spd.value(),
+                         self._spin_jog_accel.value())
         except CommandError as exc:
             self._show_error("Jog DOWN failed", str(exc))
+
+    def _on_jog_released(self) -> None:
+        """Send STOP when a jog button is released."""
+        if self._ci is None:
+            return
+        try:
+            self._ci.stop()
+        except CommandError:
+            pass   # best-effort — don't show dialog on button release
 
     def _on_run(self) -> None:
         if self._ci is None or self._combo_profile.currentIndex() < 0:

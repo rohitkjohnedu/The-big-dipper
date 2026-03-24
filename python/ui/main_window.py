@@ -60,8 +60,8 @@ from typing import Final, Optional
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QMainWindow, QMessageBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QMainWindow, QMessageBox,
+    QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core.command_interface import CommandInterface
@@ -121,7 +121,8 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self.setWindowTitle("Dip Coater Control")
         self.resize(1100, 800)
-        self.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
+        self._dark_mode: bool = True
+        self._apply_theme()
 
         # --- Tabs ----------------------------------------------------------
         self._tab_control  = ControlTab()
@@ -151,6 +152,12 @@ class MainWindow(QMainWindow):
         toolbar_layout.setSpacing(8)
         toolbar_layout.addWidget(self._estop)
         toolbar_layout.addStretch()
+
+        self._btn_theme = QPushButton("☀  Light")
+        self._btn_theme.setFixedWidth(90)
+        self._btn_theme.setToolTip("Toggle light / dark theme")
+        self._btn_theme.clicked.connect(self._on_toggle_theme)
+        toolbar_layout.addWidget(self._btn_theme)
 
         # --- Central widget ------------------------------------------------
         central = QWidget()
@@ -258,6 +265,45 @@ class MainWindow(QMainWindow):
                 self._tab_control.update_state(frame.state)
             except queue.Empty:
                 break
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+
+    _DARK_STYLESHEET: str = (
+        "QWidget { background-color: #2b2b2b; color: #eeeeee; }"
+        "QGroupBox { border: 1px solid #555; border-radius: 4px; margin-top: 6px; color: #cccccc; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        "QTabWidget::pane { border: 1px solid #555; }"
+        "QTabBar::tab { background: #3a3a3a; color: #cccccc; padding: 5px 12px; border: 1px solid #555; }"
+        "QTabBar::tab:selected { background: #1565c0; color: white; }"
+        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit { "
+        "  background-color: #1e1e1e; color: #eeeeee; border: 1px solid #555; border-radius: 3px; padding: 2px; }"
+        "QTableWidget { background-color: #1e1e1e; color: #eeeeee; gridline-color: #444; }"
+        "QHeaderView::section { background-color: #3a3a3a; color: #cccccc; border: 1px solid #555; padding: 3px; }"
+        "QScrollBar:vertical { background: #2b2b2b; width: 10px; }"
+        "QScrollBar::handle:vertical { background: #555; border-radius: 5px; }"
+        "QPushButton { background-color: #3a3a3a; color: #eeeeee; border: 1px solid #555; "
+        "  border-radius: 4px; padding: 4px 10px; }"
+        "QPushButton:hover { background-color: #484848; }"
+        "QPushButton:pressed { background-color: #222; }"
+        "QPushButton:disabled { background-color: #333; color: #666; }"
+        "QCheckBox { color: #cccccc; } QLabel { color: #cccccc; }"
+        "QListWidget { background-color: #1e1e1e; color: #eeeeee; border: 1px solid #555; }"
+    )
+
+    def _apply_theme(self) -> None:
+        app = QApplication.instance()
+        if self._dark_mode:
+            app.setStyleSheet(self._DARK_STYLESHEET)
+            self.setStyleSheet("")   # let app stylesheet handle everything
+        else:
+            app.setStyleSheet("")    # revert to default Fusion light
+
+    def _on_toggle_theme(self) -> None:
+        self._dark_mode = not self._dark_mode
+        self._apply_theme()
+        self._btn_theme.setText("☀  Light" if self._dark_mode else "🌙  Dark")
 
     # ------------------------------------------------------------------
     # Cleanup
