@@ -461,7 +461,14 @@ void MotionController::onEndstopTriggered(bool isTop) {
 
 float MotionController::getPositionMm()                { return positionMm();          }
 float MotionController::getActualVelocityMms()         { return actualVelocityMms();   }
-float MotionController::getCommandedVelocityMms() const{ return _commandedVelocityMms; }
+float MotionController::getCommandedVelocityMms() const{
+    // _commandedVelocityMms stores the speed magnitude.  During JOG the
+    // direction is only in _jogUp, so apply the sign here for telemetry.
+    if (_mode == ProfileMode::JOG) {
+        return _jogUp ? _commandedVelocityMms : -_commandedVelocityMms;
+    }
+    return _commandedVelocityMms;
+}
 float MotionController::getActualAccelMms2()      const{ return 0.0f;                  }  // not yet implemented
 
 bool MotionController::isMoving() {

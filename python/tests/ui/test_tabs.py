@@ -341,18 +341,22 @@ class TestSerialMonitorTab:
         qtbot.addWidget(tab)
         assert tab._manager is None
 
-    def test_tx_and_rx_lists_exist(self, qtbot):
+    def test_all_four_panels_exist(self, qtbot):
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
         assert tab._tx_list is not None
+        assert tab._history_list is not None
+        assert tab._telem_list is not None
         assert tab._rx_list is not None
 
-    def test_lists_not_user_selectable(self, qtbot):
+    def test_log_lists_not_user_selectable(self, qtbot):
         from PyQt6.QtWidgets import QAbstractItemView
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
-        assert tab._tx_list.selectionMode() == QAbstractItemView.SelectionMode.NoSelection
-        assert tab._rx_list.selectionMode() == QAbstractItemView.SelectionMode.NoSelection
+        no_sel = QAbstractItemView.SelectionMode.NoSelection
+        assert tab._tx_list.selectionMode()    == no_sel
+        assert tab._telem_list.selectionMode() == no_sel
+        assert tab._rx_list.selectionMode()    == no_sel
 
     # ------------------------------------------------------------------
     # set_manager
@@ -392,7 +396,7 @@ class TestSerialMonitorTab:
         items = [tab._tx_list.item(i).text() for i in range(tab._tx_list.count())]
         assert "TX CMD HOME" in items
 
-    def test_poll_appends_rx_to_rx_list(self, qtbot):
+    def test_poll_appends_rx_ack_to_rx_list(self, qtbot):
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
         mgr = _make_manager(["RX ACK HOME"])
@@ -400,6 +404,17 @@ class TestSerialMonitorTab:
         tab._poll_raw_queue()
         items = [tab._rx_list.item(i).text() for i in range(tab._rx_list.count())]
         assert "RX ACK HOME" in items
+
+    def test_poll_appends_telem_to_telem_list(self, qtbot):
+        tab = SerialMonitorTab()
+        qtbot.addWidget(tab)
+        telem_line = "RX TELEM,1000,10.00,0.00,0.00,0.00,READY,NONE"
+        mgr = _make_manager([telem_line])
+        tab.set_manager(mgr)
+        tab._poll_raw_queue()
+        items = [tab._telem_list.item(i).text() for i in range(tab._telem_list.count())]
+        assert telem_line in items
+        assert tab._rx_list.count() == 0   # must NOT appear in other-RX
 
     def test_poll_does_nothing_without_manager(self, qtbot):
         tab = SerialMonitorTab()

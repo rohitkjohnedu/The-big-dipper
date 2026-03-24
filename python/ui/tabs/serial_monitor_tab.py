@@ -2,43 +2,39 @@
 ui/tabs/serial_monitor_tab.py
 =============================
 
-Serial monitor tab — mirrors the Arduino IDE serial monitor with extras.
+Serial monitor tab — 2×2 grid of log panels + command input.
 
-Layout (QSplitter — left pane wider by default)
-------------------------------------------------
-Left pane (vertical splitter):
+Layout
+------
 
-  * **TX panel** — ``QListWidget`` (read-only), amber text, shows every
-    command sent to the Arduino (lines from ``raw_queue`` prefixed ``TX ``).
+    ┌──────────────────────────┬────────────────────────────┐
+    │  TX  (sent commands)     │  Sent History              │
+    │  amber text              │  click to reload           │
+    │                          │                            │
+    ├──────────────────────────┼────────────────────────────┤
+    │  TELEM  (RX telem lines) │  Other RX  (ACK/ERR/…)    │
+    │  grey text               │  green/red/white           │
+    │                          │                            │
+    └──────────────────────────┴────────────────────────────┘
+    ┌────────────────────────────────────────────────────────┐
+    │  Quick: [dropdown]  [Send]                             │
+    │  ┌─ Command Input (Ctrl+Enter to send) ──────────────┐ │
+    │  │                                                   │ │
+    │  └───────────────────────────────────────────────────┘ │
+    │  [✓ Auto-scroll]                          [Clear]      │
+    └────────────────────────────────────────────────────────┘
 
-  * **RX panel** — ``QListWidget`` (read-only), colour-coded lines::
-
-        ACK   →  green  (#4caf50)
-        ERR   →  red    (#ef5350)
-        TELEM →  grey   (#888888)
-        other →  white  (#eeeeee)
-
-  * **Quick-command bar** — ``QComboBox`` of common commands + Send button.
-  * **Input area** — ``_CommandInput`` (``QPlainTextEdit`` subclass):
-      - Tab / popup after 3 chars: ``QCompleter`` autocomplete (case-insensitive).
-      - Up / Down arrows while empty: cycle through command history batches.
-      - Ctrl+Enter: send all lines sequentially.
-  * **Toolbar row** — Auto-scroll toggle, Clear button (clears both lists).
-
-Right pane:
-  * **History list** — ``QListWidget`` showing all previously sent batches
-    (most-recent on top).  Clicking a row re-loads it into the input area.
+Grid cells:
+  (0,0) TX commands sent to Arduino
+  (0,1) Sent command history sidebar
+  (1,0) TELEM lines received from Arduino
+  (1,1) All other RX lines (ACK, ERR, STATE, DIAG, …)
 
 Public API (called by ``MainWindow``):
 
     tab.set_manager(mgr)   # pass SerialManager / MockArduino (or None)
 
 The tab polls ``mgr.raw_queue`` at 20 Hz via a ``QTimer``.
-
-Command vocabulary
-------------------
-``KNOWN_COMMANDS`` is the autocomplete source.  It covers every command the
-Arduino firmware accepts as of config.h / protocol.md.
 """
 
 from __future__ import annotations
@@ -51,7 +47,7 @@ from PyQt6.QtGui import QBrush, QColor, QTextCursor, QKeyEvent
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QCompleter, QGroupBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QPlainTextEdit,
-    QSplitter, QVBoxLayout, QWidget,
+    QGridLayout, QVBoxLayout, QWidget,
 )
 
 log: Final[logging.Logger] = logging.getLogger(__name__)
@@ -89,7 +85,7 @@ _QUICK_COMMANDS: Final[list[str]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Log-line colours
+# Colours
 # ---------------------------------------------------------------------------
 
 _COL_TX:    Final[str] = "#e6a817"   # amber
@@ -98,7 +94,7 @@ _COL_ERR:   Final[str] = "#ef5350"   # red
 _COL_TELEM: Final[str] = "#888888"   # grey
 _COL_OTHER: Final[str] = "#eeeeee"   # white
 
-# Maximum items kept in each list widget before old entries are trimmed.
+# Maximum items per list widget before oldest entries are trimmed.
 _MAX_LIST_ITEMS: Final[int] = 2000
 
 _LIST_STYLE: Final[str] = (
@@ -112,13 +108,11 @@ _LIST_STYLE: Final[str] = (
 )
 
 
-def _rx_color(line: str) -> str:
+def _other_rx_color(line: str) -> str:
     if line.startswith("RX ACK"):
         return _COL_ACK
     if line.startswith("RX ERR") or line.startswith("ERR"):
         return _COL_ERR
-    if line.startswith("RX TELEM"):
-        return _COL_TELEM
     return _COL_OTHER
 
 
@@ -127,23 +121,13 @@ def _rx_color(line: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _CommandInput(QPlainTextEdit):
-    """
-    Multi-line command input with:
-
-    * **Autocomplete** — ``QCompleter`` (case-insensitive) attached to the
-      current line's text; popup appears after 3 characters, Tab accepts.
-    * **History navigation** — Up / Down arrows (when text is absent from
-      the cursor line or only whitespace before cursor) cycle through
-      previously sent batches loaded from ``_history``.
-    * **Send trigger** — Ctrl+Enter calls the ``send_callback`` supplied at
-      construction time.
-    """
+    """Multi-line command input with autocomplete, history nav, and Ctrl+Enter send."""
 
     def __init__(self, send_callback, parent=None) -> None:
         super().__init__(parent)
         self._send_cb = send_callback
-        self._history: list[str] = []   # each element is a multi-line batch
-        self._hist_idx: int = -1        # -1 = current draft
+        self._history: list[str] = []
+        self._hist_idx: int = -1
 
         self.setPlaceholderText(
             "Type command(s), one per line.\n"
@@ -152,7 +136,6 @@ class _CommandInput(QPlainTextEdit):
         self.setFixedHeight(90)
         self.setFont(self.document().defaultFont())
 
-        # --- QCompleter ---
         self._model = QStringListModel(KNOWN_COMMANDS)
         self._completer = QCompleter(self._model, self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -160,22 +143,12 @@ class _CommandInput(QPlainTextEdit):
         self._completer.setWidget(self)
         self._completer.activated.connect(self._insert_completion)
 
-    # ------------------------------------------------------------------
-    # Public helpers called by SerialMonitorTab
-    # ------------------------------------------------------------------
-
     def push_history(self, batch: str) -> None:
-        """Prepend a sent batch to the history list."""
         if batch.strip():
             self._history.insert(0, batch)
         self._hist_idx = -1
 
-    # ------------------------------------------------------------------
-    # Key handling
-    # ------------------------------------------------------------------
-
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
-        # --- Ctrl+Enter → send --------------------------------------------
         if (
             event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
@@ -183,19 +156,16 @@ class _CommandInput(QPlainTextEdit):
             self._send_cb()
             return
 
-        # --- Tab → accept autocomplete suggestion -------------------------
         if event.key() == Qt.Key.Key_Tab and self._completer.popup().isVisible():
             self._completer.popup().hide()
             idx = self._completer.popup().currentIndex()
             if idx.isValid():
                 self._insert_completion(self._completer.completionModel().data(idx))
             else:
-                # Accept first match
                 self._completer.setCurrentRow(0)
                 self._insert_completion(self._completer.currentCompletion())
             return
 
-        # --- Up arrow → history older -------------------------------------
         if event.key() == Qt.Key.Key_Up and not self._completer.popup().isVisible():
             if self._history and self._hist_idx < len(self._history) - 1:
                 self._hist_idx += 1
@@ -203,7 +173,6 @@ class _CommandInput(QPlainTextEdit):
                 self._move_cursor_end()
             return
 
-        # --- Down arrow → history newer -----------------------------------
         if event.key() == Qt.Key.Key_Down and not self._completer.popup().isVisible():
             if self._hist_idx > 0:
                 self._hist_idx -= 1
@@ -214,20 +183,12 @@ class _CommandInput(QPlainTextEdit):
                 self.clear()
             return
 
-        # --- Escape → hide popup ------------------------------------------
         if event.key() == Qt.Key.Key_Escape:
             self._completer.popup().hide()
             return
 
-        # Default handling
         super().keyPressEvent(event)
-
-        # After every other keypress: update autocomplete
         self._update_completer()
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _current_line_text(self) -> str:
         cursor = self.textCursor()
@@ -251,13 +212,10 @@ class _CommandInput(QPlainTextEdit):
         if len(prefix) < 3:
             self._completer.popup().hide()
             return
-
         self._completer.setCompletionPrefix(prefix)
         if self._completer.completionCount() == 0:
             self._completer.popup().hide()
             return
-
-        # Position the popup below the current line
         rect = self.cursorRect()
         rect.setWidth(
             self._completer.popup().sizeHintForColumn(0)
@@ -272,10 +230,10 @@ class _CommandInput(QPlainTextEdit):
 
 class SerialMonitorTab(QWidget):
     """
-    Serial monitor tab — separate TX and RX panels + multi-line command input.
+    Serial monitor tab — 2×2 grid of log panels.
 
-    TX panel (amber): commands sent to the Arduino.
-    RX panel (colour-coded): responses and telemetry received from the Arduino.
+    (0,0) TX sent   (0,1) Sent History
+    (1,0) TELEM RX  (1,1) Other RX (ACK/ERR/…)
 
     Call :meth:`set_manager` whenever the connection changes.
     """
@@ -287,7 +245,6 @@ class SerialMonitorTab(QWidget):
 
         self._build_ui()
 
-        # Poll raw_queue at 20 Hz
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(50)
         self._poll_timer.timeout.connect(self._poll_raw_queue)
@@ -306,45 +263,46 @@ class SerialMonitorTab(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # ---- 2×2 log grid ------------------------------------------------
+        grid = QGridLayout()
+        grid.setSpacing(4)
 
-        # ---- Left pane ---------------------------------------------------
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
+        self._tx_list      = self._make_list()
+        self._history_list = self._make_list(selectable=True)
+        self._telem_list   = self._make_list()
+        self._rx_list      = self._make_list()
 
-        # TX / RX log panels in a vertical splitter
-        log_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._history_list.setToolTip("Click a row to reload it in the input area")
+        self._history_list.setStyleSheet(
+            "QListWidget {"
+            "  font-family: Consolas, 'Courier New', monospace;"
+            "  font-size: 9pt;"
+            "}"
+        )
+        self._history_list.itemClicked.connect(self._on_history_clicked)
 
-        tx_grp = QGroupBox("TX  (sent)")
-        tx_layout = QVBoxLayout(tx_grp)
-        tx_layout.setContentsMargins(2, 4, 2, 2)
-        self._tx_list = QListWidget()
-        self._tx_list.setStyleSheet(_LIST_STYLE)
-        self._tx_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        tx_layout.addWidget(self._tx_list)
+        tx_grp    = self._wrap_group("TX  (sent)",            self._tx_list)
+        hist_grp  = self._wrap_group("Sent History",          self._history_list)
+        telem_grp = self._wrap_group("TELEM  (received)",     self._telem_list)
+        rx_grp    = self._wrap_group("Other RX  (ACK / ERR)", self._rx_list)
 
-        rx_grp = QGroupBox("RX  (received)")
-        rx_layout = QVBoxLayout(rx_grp)
-        rx_layout.setContentsMargins(2, 4, 2, 2)
-        self._rx_list = QListWidget()
-        self._rx_list.setStyleSheet(_LIST_STYLE)
-        self._rx_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        rx_layout.addWidget(self._rx_list)
+        grid.addWidget(tx_grp,    0, 0)
+        grid.addWidget(hist_grp,  0, 1)
+        grid.addWidget(telem_grp, 1, 0)
+        grid.addWidget(rx_grp,    1, 1)
 
-        log_splitter.addWidget(tx_grp)
-        log_splitter.addWidget(rx_grp)
-        log_splitter.setStretchFactor(0, 1)
-        log_splitter.setStretchFactor(1, 2)
+        grid.setRowStretch(0, 1)
+        grid.setRowStretch(1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
-        left_layout.addWidget(log_splitter, stretch=1)
+        outer.addLayout(grid, stretch=1)
 
-        # Quick-command row
+        # ---- Quick-command row -------------------------------------------
         quick_row = QHBoxLayout()
         quick_row.setSpacing(4)
         self._combo_quick = QComboBox()
@@ -357,17 +315,17 @@ class SerialMonitorTab(QWidget):
         quick_row.addWidget(QLabel("Quick:"))
         quick_row.addWidget(self._combo_quick, stretch=1)
         quick_row.addWidget(btn_quick_send)
-        left_layout.addLayout(quick_row)
+        outer.addLayout(quick_row)
 
-        # Command input
+        # ---- Command input -----------------------------------------------
         input_grp = QGroupBox("Command Input  (Ctrl+Enter to send)")
         input_layout = QVBoxLayout(input_grp)
         input_layout.setContentsMargins(4, 4, 4, 4)
         self._input = _CommandInput(send_callback=self._on_send)
         input_layout.addWidget(self._input)
-        left_layout.addWidget(input_grp)
+        outer.addWidget(input_grp)
 
-        # Toolbar row
+        # ---- Toolbar row -------------------------------------------------
         toolbar = QHBoxLayout()
         toolbar.setSpacing(6)
         self._chk_autoscroll = QCheckBox("Auto-scroll")
@@ -379,37 +337,29 @@ class SerialMonitorTab(QWidget):
         toolbar.addWidget(self._chk_autoscroll)
         toolbar.addStretch()
         toolbar.addWidget(btn_clear)
-        left_layout.addLayout(toolbar)
+        outer.addLayout(toolbar)
 
-        # ---- Right pane — history ----------------------------------------
-        right_grp = QGroupBox("Sent History")
-        right_layout = QVBoxLayout(right_grp)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-        self._history_list = QListWidget()
-        self._history_list.setToolTip("Click a row to reload it in the input area")
-        self._history_list.setStyleSheet(
-            "QListWidget {"
-            "  font-family: Consolas, 'Courier New', monospace;"
-            "  font-size: 9pt;"
-            "}"
-        )
-        self._history_list.itemClicked.connect(self._on_history_clicked)
-        right_layout.addWidget(self._history_list)
-        right_grp.setMinimumWidth(180)
+    @staticmethod
+    def _make_list(selectable: bool = False) -> QListWidget:
+        lst = QListWidget()
+        lst.setStyleSheet(_LIST_STYLE)
+        if not selectable:
+            lst.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        return lst
 
-        splitter.addWidget(left)
-        splitter.addWidget(right_grp)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-
-        outer.addWidget(splitter)
+    @staticmethod
+    def _wrap_group(title: str, widget: QWidget) -> QGroupBox:
+        grp = QGroupBox(title)
+        lay = QVBoxLayout(grp)
+        lay.setContentsMargins(2, 4, 2, 2)
+        lay.addWidget(widget)
+        return grp
 
     # ------------------------------------------------------------------
     # Private — slot handlers
     # ------------------------------------------------------------------
 
     def _on_send(self) -> None:
-        """Send all lines in the input area sequentially."""
         if self._manager is None:
             return
         raw_text = self._input.toPlainText()
@@ -424,12 +374,10 @@ class SerialMonitorTab(QWidget):
                 self._append_to(self._rx_list, f"ERR {exc}", _COL_ERR)
                 log.error("send_command(%r) failed: %s", line, exc)
 
-        # Push to history (multi-line batch stored as-is)
         batch = "\n".join(lines)
         self._input.push_history(batch)
         self._input.clear()
 
-        # Add to history sidebar (most recent at top)
         preview = batch if len(batch) <= 60 else batch[:57] + "…"
         item = QListWidgetItem(preview)
         item.setData(Qt.ItemDataRole.UserRole, batch)
@@ -457,6 +405,7 @@ class SerialMonitorTab(QWidget):
 
     def _clear_logs(self) -> None:
         self._tx_list.clear()
+        self._telem_list.clear()
         self._rx_list.clear()
 
     # ------------------------------------------------------------------
@@ -470,15 +419,17 @@ class SerialMonitorTab(QWidget):
         if raw_q is None:
             return
         count = 0
-        while count < 50:   # drain at most 50 lines per tick to stay responsive
+        while count < 50:
             try:
                 line: str = raw_q.get_nowait()
             except Exception:
                 break
             if line.startswith("TX "):
                 self._append_to(self._tx_list, line, _COL_TX)
+            elif line.startswith("RX TELEM"):
+                self._append_to(self._telem_list, line, _COL_TELEM)
             else:
-                self._append_to(self._rx_list, line, _rx_color(line))
+                self._append_to(self._rx_list, line, _other_rx_color(line))
             count += 1
 
     # ------------------------------------------------------------------
@@ -486,14 +437,10 @@ class SerialMonitorTab(QWidget):
     # ------------------------------------------------------------------
 
     def _append_to(self, lst: QListWidget, text: str, color: str) -> None:
-        """Append a coloured item to ``lst``, trimming old entries if over limit."""
         item = QListWidgetItem(text)
         item.setForeground(QBrush(QColor(color)))
         lst.addItem(item)
-
-        # Trim oldest entries if we exceed the cap
         while lst.count() > _MAX_LIST_ITEMS:
             lst.takeItem(0)
-
         if self._auto_scroll:
             lst.scrollToBottom()
