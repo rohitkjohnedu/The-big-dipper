@@ -261,7 +261,7 @@ class TestControlTab:
         tab._btn_stop.click()
         ci.stop.assert_called_once()
 
-    def test_jog_up_calls_ci_jog(self, qtbot):
+    def test_jog_up_calls_ci_jog_start(self, qtbot):
         ci = _make_ci()
         tab = ControlTab()
         qtbot.addWidget(tab)
@@ -270,9 +270,9 @@ class TestControlTab:
         tab._spin_jog_spd.setValue(3.5)
         tab._spin_jog_accel.setValue(25.0)
         tab._on_jog_up_pressed()
-        ci.jog.assert_called_once_with("UP", 3.5, 25.0)
+        ci.jog_start.assert_called_once_with("UP", 3.5, 25.0)
 
-    def test_jog_down_calls_ci_jog(self, qtbot):
+    def test_jog_down_calls_ci_jog_start(self, qtbot):
         ci = _make_ci()
         tab = ControlTab()
         qtbot.addWidget(tab)
@@ -281,15 +281,15 @@ class TestControlTab:
         tab._spin_jog_spd.setValue(2.0)
         tab._spin_jog_accel.setValue(20.0)
         tab._on_jog_down_pressed()
-        ci.jog.assert_called_once_with("DOWN", 2.0, 20.0)
+        ci.jog_start.assert_called_once_with("DOWN", 2.0, 20.0)
 
-    def test_jog_released_calls_stop(self, qtbot):
+    def test_stop_button_stops_jog(self, qtbot):
         ci = _make_ci()
         tab = ControlTab()
         qtbot.addWidget(tab)
         tab.set_command_interface(ci)
         tab.update_state("READY")
-        tab._on_jog_released()
+        tab._btn_stop.click()
         ci.stop.assert_called_once()
 
     def test_jog_accel_spinbox_default(self, qtbot):
@@ -341,15 +341,18 @@ class TestSerialMonitorTab:
         qtbot.addWidget(tab)
         assert tab._manager is None
 
-    def test_log_pane_is_read_only(self, qtbot):
+    def test_tx_and_rx_lists_exist(self, qtbot):
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
-        assert tab._log.isReadOnly()
+        assert tab._tx_list is not None
+        assert tab._rx_list is not None
 
-    def test_log_max_block_count_is_bounded(self, qtbot):
+    def test_lists_not_user_selectable(self, qtbot):
+        from PyQt6.QtWidgets import QAbstractItemView
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
-        assert tab._log.maximumBlockCount() == 2000
+        assert tab._tx_list.selectionMode() == QAbstractItemView.SelectionMode.NoSelection
+        assert tab._rx_list.selectionMode() == QAbstractItemView.SelectionMode.NoSelection
 
     # ------------------------------------------------------------------
     # set_manager
@@ -380,13 +383,23 @@ class TestSerialMonitorTab:
         tab._poll_raw_queue()
         assert mgr.raw_queue.empty()
 
-    def test_poll_appends_to_log(self, qtbot):
+    def test_poll_appends_tx_to_tx_list(self, qtbot):
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
         mgr = _make_manager(["TX CMD HOME"])
         tab.set_manager(mgr)
         tab._poll_raw_queue()
-        assert "TX CMD HOME" in tab._log.toPlainText()
+        items = [tab._tx_list.item(i).text() for i in range(tab._tx_list.count())]
+        assert "TX CMD HOME" in items
+
+    def test_poll_appends_rx_to_rx_list(self, qtbot):
+        tab = SerialMonitorTab()
+        qtbot.addWidget(tab)
+        mgr = _make_manager(["RX ACK HOME"])
+        tab.set_manager(mgr)
+        tab._poll_raw_queue()
+        items = [tab._rx_list.item(i).text() for i in range(tab._rx_list.count())]
+        assert "RX ACK HOME" in items
 
     def test_poll_does_nothing_without_manager(self, qtbot):
         tab = SerialMonitorTab()
@@ -458,7 +471,7 @@ class TestSerialMonitorTab:
         tab._input.setPlainText("CMD HOME")
         tab._on_send()   # must not raise
 
-    def test_send_error_appends_to_log(self, qtbot):
+    def test_send_error_appends_to_rx_list(self, qtbot):
         tab = SerialMonitorTab()
         qtbot.addWidget(tab)
         mgr = _make_manager()
@@ -466,7 +479,8 @@ class TestSerialMonitorTab:
         tab.set_manager(mgr)
         tab._input.setPlainText("CMD HOME")
         tab._on_send()
-        assert "ERR" in tab._log.toPlainText()
+        items = [tab._rx_list.item(i).text() for i in range(tab._rx_list.count())]
+        assert any("ERR" in t for t in items)
 
     # ------------------------------------------------------------------
     # Quick send

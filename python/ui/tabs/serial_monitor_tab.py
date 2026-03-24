@@ -6,21 +6,24 @@ Serial monitor tab — mirrors the Arduino IDE serial monitor with extras.
 
 Layout (QSplitter — left pane wider by default)
 ------------------------------------------------
-Left pane:
-  * **Log view** — ``QPlainTextEdit`` (read-only), colour-coded lines::
+Left pane (vertical splitter):
 
-        TX  →  amber  (#e6a817)
-        ACK →  green  (#4caf50)
-        ERR →  red    (#ef5350)
-        TELEM → grey  (#888888)
-        other →  white (#eeeeee)
+  * **TX panel** — ``QListWidget`` (read-only), amber text, shows every
+    command sent to the Arduino (lines from ``raw_queue`` prefixed ``TX ``).
+
+  * **RX panel** — ``QListWidget`` (read-only), colour-coded lines::
+
+        ACK   →  green  (#4caf50)
+        ERR   →  red    (#ef5350)
+        TELEM →  grey   (#888888)
+        other →  white  (#eeeeee)
 
   * **Quick-command bar** — ``QComboBox`` of common commands + Send button.
   * **Input area** — ``_CommandInput`` (``QPlainTextEdit`` subclass):
       - Tab / popup after 3 chars: ``QCompleter`` autocomplete (case-insensitive).
       - Up / Down arrows while empty: cycle through command history batches.
       - Ctrl+Enter: send all lines sequentially.
-  * **Toolbar row** — Auto-scroll toggle, Clear button.
+  * **Toolbar row** — Auto-scroll toggle, Clear button (clears both lists).
 
 Right pane:
   * **History list** — ``QListWidget`` showing all previously sent batches
@@ -44,7 +47,7 @@ import logging
 from typing import Final, Optional
 
 from PyQt6.QtCore import Qt, QStringListModel, QTimer
-from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QKeyEvent
+from PyQt6.QtGui import QBrush, QColor, QTextCursor, QKeyEvent
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QCompleter, QGroupBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QPlainTextEdit,
@@ -95,13 +98,24 @@ _COL_ERR:   Final[str] = "#ef5350"   # red
 _COL_TELEM: Final[str] = "#888888"   # grey
 _COL_OTHER: Final[str] = "#eeeeee"   # white
 
+# Maximum items kept in each list widget before old entries are trimmed.
+_MAX_LIST_ITEMS: Final[int] = 2000
 
-def _color_for_line(line: str) -> str:
-    if line.startswith("TX "):
-        return _COL_TX
+_LIST_STYLE: Final[str] = (
+    "QListWidget {"
+    "  background-color: #1e1e1e;"
+    "  color: #eeeeee;"
+    "  font-family: Consolas, 'Courier New', monospace;"
+    "  font-size: 9pt;"
+    "  border: none;"
+    "}"
+)
+
+
+def _rx_color(line: str) -> str:
     if line.startswith("RX ACK"):
         return _COL_ACK
-    if line.startswith("RX ERR"):
+    if line.startswith("RX ERR") or line.startswith("ERR"):
         return _COL_ERR
     if line.startswith("RX TELEM"):
         return _COL_TELEM
@@ -258,7 +272,10 @@ class _CommandInput(QPlainTextEdit):
 
 class SerialMonitorTab(QWidget):
     """
-    Serial monitor tab — real-time TX/RX log + multi-line command input.
+    Serial monitor tab — separate TX and RX panels + multi-line command input.
+
+    TX panel (amber): commands sent to the Arduino.
+    RX panel (colour-coded): responses and telemetry received from the Arduino.
 
     Call :meth:`set_manager` whenever the connection changes.
     """
@@ -301,19 +318,31 @@ class SerialMonitorTab(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(4)
 
-        # Log view
-        self._log = QPlainTextEdit()
-        self._log.setReadOnly(True)
-        self._log.setMaximumBlockCount(2000)
-        self._log.setStyleSheet(
-            "QPlainTextEdit {"
-            "  background-color: #1e1e1e;"
-            "  color: #eeeeee;"
-            "  font-family: Consolas, 'Courier New', monospace;"
-            "  font-size: 9pt;"
-            "}"
-        )
-        left_layout.addWidget(self._log, stretch=1)
+        # TX / RX log panels in a vertical splitter
+        log_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        tx_grp = QGroupBox("TX  (sent)")
+        tx_layout = QVBoxLayout(tx_grp)
+        tx_layout.setContentsMargins(2, 4, 2, 2)
+        self._tx_list = QListWidget()
+        self._tx_list.setStyleSheet(_LIST_STYLE)
+        self._tx_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        tx_layout.addWidget(self._tx_list)
+
+        rx_grp = QGroupBox("RX  (received)")
+        rx_layout = QVBoxLayout(rx_grp)
+        rx_layout.setContentsMargins(2, 4, 2, 2)
+        self._rx_list = QListWidget()
+        self._rx_list.setStyleSheet(_LIST_STYLE)
+        self._rx_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        rx_layout.addWidget(self._rx_list)
+
+        log_splitter.addWidget(tx_grp)
+        log_splitter.addWidget(rx_grp)
+        log_splitter.setStretchFactor(0, 1)
+        log_splitter.setStretchFactor(1, 2)
+
+        left_layout.addWidget(log_splitter, stretch=1)
 
         # Quick-command row
         quick_row = QHBoxLayout()
@@ -346,7 +375,7 @@ class SerialMonitorTab(QWidget):
         self._chk_autoscroll.toggled.connect(self._on_autoscroll_toggled)
         btn_clear = QPushButton("Clear")
         btn_clear.setFixedWidth(60)
-        btn_clear.clicked.connect(self._log.clear)
+        btn_clear.clicked.connect(self._clear_logs)
         toolbar.addWidget(self._chk_autoscroll)
         toolbar.addStretch()
         toolbar.addWidget(btn_clear)
@@ -392,7 +421,7 @@ class SerialMonitorTab(QWidget):
             try:
                 self._manager.send_command(line)
             except Exception as exc:
-                self._append_line(f"ERR {exc}", _COL_ERR)
+                self._append_to(self._rx_list, f"ERR {exc}", _COL_ERR)
                 log.error("send_command(%r) failed: %s", line, exc)
 
         # Push to history (multi-line batch stored as-is)
@@ -413,7 +442,7 @@ class SerialMonitorTab(QWidget):
         try:
             self._manager.send_command(cmd)
         except Exception as exc:
-            self._append_line(f"ERR {exc}", _COL_ERR)
+            self._append_to(self._rx_list, f"ERR {exc}", _COL_ERR)
 
     def _on_history_clicked(self, item: QListWidgetItem) -> None:
         batch: str = item.data(Qt.ItemDataRole.UserRole)
@@ -425,6 +454,10 @@ class SerialMonitorTab(QWidget):
 
     def _on_autoscroll_toggled(self, checked: bool) -> None:
         self._auto_scroll = checked
+
+    def _clear_logs(self) -> None:
+        self._tx_list.clear()
+        self._rx_list.clear()
 
     # ------------------------------------------------------------------
     # Private — raw_queue polling
@@ -442,22 +475,25 @@ class SerialMonitorTab(QWidget):
                 line: str = raw_q.get_nowait()
             except Exception:
                 break
-            self._append_line(line, _color_for_line(line))
+            if line.startswith("TX "):
+                self._append_to(self._tx_list, line, _COL_TX)
+            else:
+                self._append_to(self._rx_list, line, _rx_color(line))
             count += 1
 
     # ------------------------------------------------------------------
-    # Private — log append
+    # Private — list append helper
     # ------------------------------------------------------------------
 
-    def _append_line(self, text: str, color: str) -> None:
-        cursor = self._log.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
+    def _append_to(self, lst: QListWidget, text: str, color: str) -> None:
+        """Append a coloured item to ``lst``, trimming old entries if over limit."""
+        item = QListWidgetItem(text)
+        item.setForeground(QBrush(QColor(color)))
+        lst.addItem(item)
 
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        cursor.setCharFormat(fmt)
-        cursor.insertText(text + "\n")
+        # Trim oldest entries if we exceed the cap
+        while lst.count() > _MAX_LIST_ITEMS:
+            lst.takeItem(0)
 
         if self._auto_scroll:
-            self._log.setTextCursor(cursor)
-            self._log.ensureCursorVisible()
+            lst.scrollToBottom()

@@ -200,13 +200,13 @@ class ControlTab(QWidget):
 
         # --- Buttons -------------------------------------------------------
         self._btn_jog_up = QPushButton("↑")
+        self._btn_jog_up.setObjectName("jogUp")
         self._btn_jog_up.setToolTip(
-            "Jog UP — hold to move, release to stop  (READY only)"
+            "Jog UP — click to start, click Stop to halt  (READY only)"
         )
-        self._btn_jog_up.pressed.connect(self._on_jog_up_pressed)
-        self._btn_jog_up.released.connect(self._on_jog_released)
+        self._btn_jog_up.clicked.connect(self._on_jog_up_pressed)
         self._btn_jog_up.setStyleSheet(
-            "QPushButton {"
+            "QPushButton#jogUp {"
             "  border-top-left-radius: 52px;"
             "  border-top-right-radius: 52px;"
             "  border-bottom-left-radius: 6px;"
@@ -215,35 +215,36 @@ class ControlTab(QWidget):
             "  font-size: 20pt; font-weight: bold;"
             "  background-color: #1565c0; color: white;"
             "}"
-            "QPushButton:pressed { background-color: #0d47a1; }"
-            "QPushButton:disabled { background-color: #444; color: #777; }"
+            "QPushButton#jogUp:pressed { background-color: #0d47a1; }"
+            "QPushButton#jogUp:disabled { background-color: #555; color: #888; }"
         )
 
         self._btn_home = QPushButton("⌂")
+        self._btn_home.setObjectName("jogHome")
         self._btn_home.setToolTip(
             "Home — drive to top endstop and zero position  (IDLE / READY / ERROR)"
         )
         self._btn_home.clicked.connect(self._on_home)
         self._btn_home.setStyleSheet(
-            "QPushButton {"
+            "QPushButton#jogHome {"
             "  border-radius: 42px;"
             "  min-width: 84px; max-width: 84px;"
             "  min-height: 84px; max-height: 84px;"
             "  font-size: 22pt;"
             "  background-color: #2e7d32; color: white;"
             "}"
-            "QPushButton:pressed { background-color: #1b5e20; }"
-            "QPushButton:disabled { background-color: #444; color: #777; }"
+            "QPushButton#jogHome:pressed { background-color: #1b5e20; }"
+            "QPushButton#jogHome:disabled { background-color: #555; color: #888; }"
         )
 
         self._btn_jog_down = QPushButton("↓")
+        self._btn_jog_down.setObjectName("jogDown")
         self._btn_jog_down.setToolTip(
-            "Jog DOWN — hold to move, release to stop  (READY only)"
+            "Jog DOWN — click to start, click Stop to halt  (READY only)"
         )
-        self._btn_jog_down.pressed.connect(self._on_jog_down_pressed)
-        self._btn_jog_down.released.connect(self._on_jog_released)
+        self._btn_jog_down.clicked.connect(self._on_jog_down_pressed)
         self._btn_jog_down.setStyleSheet(
-            "QPushButton {"
+            "QPushButton#jogDown {"
             "  border-bottom-left-radius: 52px;"
             "  border-bottom-right-radius: 52px;"
             "  border-top-left-radius: 6px;"
@@ -252,25 +253,26 @@ class ControlTab(QWidget):
             "  font-size: 20pt; font-weight: bold;"
             "  background-color: #1565c0; color: white;"
             "}"
-            "QPushButton:pressed { background-color: #0d47a1; }"
-            "QPushButton:disabled { background-color: #444; color: #777; }"
+            "QPushButton#jogDown:pressed { background-color: #0d47a1; }"
+            "QPushButton#jogDown:disabled { background-color: #555; color: #888; }"
         )
 
         self._btn_stop = QPushButton("Stop")
+        self._btn_stop.setObjectName("jogStop")
         self._btn_stop.setToolTip(
-            "Stop — decelerated halt  (RUNNING / PAUSED)"
+            "Stop — decelerated halt  (RUNNING / PAUSED / READY)"
         )
         self._btn_stop.clicked.connect(self._on_stop)
         self._btn_stop.setStyleSheet(
-            "QPushButton {"
+            "QPushButton#jogStop {"
             "  border-radius: 10px;"
             "  min-width: 80px; max-width: 80px;"
             "  min-height: 80px; max-height: 80px;"
             "  font-size: 11pt; font-weight: bold;"
             "  background-color: #b71c1c; color: white;"
             "}"
-            "QPushButton:pressed { background-color: #7f0000; }"
-            "QPushButton:disabled { background-color: #444; color: #777; }"
+            "QPushButton#jogStop:pressed { background-color: #7f0000; }"
+            "QPushButton#jogStop:disabled { background-color: #555; color: #888; }"
         )
 
         # --- Layout --------------------------------------------------------
@@ -419,30 +421,21 @@ class ControlTab(QWidget):
         if self._ci is None:
             return
         try:
-            self._ci.jog("UP",
-                         self._spin_jog_spd.value(),
-                         self._spin_jog_accel.value())
-        except CommandError as exc:
-            self._show_error("Jog UP failed", str(exc))
+            self._ci.jog_start("UP",
+                                self._spin_jog_spd.value(),
+                                self._spin_jog_accel.value())
+        except (CommandError, ValueError) as exc:
+            log.warning("Jog UP failed: %s", exc)
 
     def _on_jog_down_pressed(self) -> None:
         if self._ci is None:
             return
         try:
-            self._ci.jog("DOWN",
-                         self._spin_jog_spd.value(),
-                         self._spin_jog_accel.value())
-        except CommandError as exc:
-            self._show_error("Jog DOWN failed", str(exc))
-
-    def _on_jog_released(self) -> None:
-        """Send STOP when a jog button is released."""
-        if self._ci is None:
-            return
-        try:
-            self._ci.stop()
-        except CommandError:
-            pass   # best-effort — don't show dialog on button release
+            self._ci.jog_start("DOWN",
+                                self._spin_jog_spd.value(),
+                                self._spin_jog_accel.value())
+        except (CommandError, ValueError) as exc:
+            log.warning("Jog DOWN failed: %s", exc)
 
     def _on_run(self) -> None:
         if self._ci is None or self._combo_profile.currentIndex() < 0:

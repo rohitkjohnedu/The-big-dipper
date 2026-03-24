@@ -270,35 +270,79 @@ class MainWindow(QMainWindow):
     # Theme
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Dark: near-black with blue accents.
+    # Light: white/off-white with blue accents.
+    # Jog pad buttons use setObjectName so generic QPushButton rules
+    # do NOT affect them (ID selector #name has higher specificity).
+    # ------------------------------------------------------------------
+
     _DARK_STYLESHEET: str = (
-        "QWidget { background-color: #2b2b2b; color: #eeeeee; }"
-        "QGroupBox { border: 1px solid #555; border-radius: 4px; margin-top: 6px; color: #cccccc; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        "QTabWidget::pane { border: 1px solid #555; }"
-        "QTabBar::tab { background: #3a3a3a; color: #cccccc; padding: 5px 12px; border: 1px solid #555; }"
-        "QTabBar::tab:selected { background: #1565c0; color: white; }"
-        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit { "
-        "  background-color: #1e1e1e; color: #eeeeee; border: 1px solid #555; border-radius: 3px; padding: 2px; }"
-        "QTableWidget { background-color: #1e1e1e; color: #eeeeee; gridline-color: #444; }"
-        "QHeaderView::section { background-color: #3a3a3a; color: #cccccc; border: 1px solid #555; padding: 3px; }"
-        "QScrollBar:vertical { background: #2b2b2b; width: 10px; }"
-        "QScrollBar::handle:vertical { background: #555; border-radius: 5px; }"
-        "QPushButton { background-color: #3a3a3a; color: #eeeeee; border: 1px solid #555; "
-        "  border-radius: 4px; padding: 4px 10px; }"
-        "QPushButton:hover { background-color: #484848; }"
-        "QPushButton:pressed { background-color: #222; }"
-        "QPushButton:disabled { background-color: #333; color: #666; }"
-        "QCheckBox { color: #cccccc; } QLabel { color: #cccccc; }"
-        "QListWidget { background-color: #1e1e1e; color: #eeeeee; border: 1px solid #555; }"
+        "QWidget          { background-color: #0f1117; color: #e2e8f0; }"
+        "QGroupBox         { border: 1px solid #30363d; border-radius: 6px;"
+        "                    margin-top: 8px; color: #8b949e; }"
+        "QGroupBox::title  { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        "QTabWidget::pane  { border: 1px solid #30363d; background: #161b22; }"
+        "QTabBar::tab      { background: #161b22; color: #8b949e;"
+        "                    padding: 6px 14px; border: 1px solid #30363d; }"
+        "QTabBar::tab:selected { background: #1f6feb; color: #ffffff; border-color: #1f6feb; }"
+        "QTabBar::tab:hover    { background: #21262d; color: #e2e8f0; }"
+        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {"
+        "  background-color: #161b22; color: #e2e8f0;"
+        "  border: 1px solid #30363d; border-radius: 4px; padding: 3px 6px; }"
+        "QTableWidget      { background-color: #161b22; color: #e2e8f0;"
+        "                    gridline-color: #30363d; alternate-background-color: #1a2028; }"
+        "QHeaderView::section { background-color: #21262d; color: #8b949e;"
+        "                       border: 1px solid #30363d; padding: 4px; }"
+        "QScrollBar:vertical   { background: #161b22; width: 8px; border-radius: 4px; }"
+        "QScrollBar::handle:vertical { background: #30363d; border-radius: 4px; }"
+        # Generic buttons — NO border-radius so jog pad shapes are unaffected
+        "QPushButton        { background-color: #21262d; color: #e2e8f0;"
+        "                     border: 1px solid #30363d; padding: 5px 12px; }"
+        "QPushButton:hover  { background-color: #30363d; border-color: #8b949e; }"
+        "QPushButton:pressed{ background-color: #161b22; }"
+        "QPushButton:disabled { background-color: #161b22; color: #484f58; }"
+        "QCheckBox { color: #8b949e; spacing: 6px; }"
+        "QLabel    { color: #8b949e; }"
+        "QListWidget { background-color: #161b22; color: #e2e8f0; border: 1px solid #30363d; }"
+    )
+
+    _LIGHT_STYLESHEET: str = (
+        "QWidget          { background-color: #f6f8fa; color: #24292f; }"
+        "QGroupBox         { border: 1px solid #d0d7de; border-radius: 6px;"
+        "                    margin-top: 8px; color: #57606a; }"
+        "QGroupBox::title  { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+        "QTabWidget::pane  { border: 1px solid #d0d7de; background: #ffffff; }"
+        "QTabBar::tab      { background: #f6f8fa; color: #57606a;"
+        "                    padding: 6px 14px; border: 1px solid #d0d7de; }"
+        "QTabBar::tab:selected { background: #0969da; color: #ffffff; border-color: #0969da; }"
+        "QTabBar::tab:hover    { background: #eaeef2; color: #24292f; }"
+        "QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {"
+        "  background-color: #ffffff; color: #24292f;"
+        "  border: 1px solid #d0d7de; border-radius: 4px; padding: 3px 6px; }"
+        "QTableWidget      { background-color: #ffffff; color: #24292f;"
+        "                    gridline-color: #d0d7de; alternate-background-color: #f6f8fa; }"
+        "QHeaderView::section { background-color: #f6f8fa; color: #57606a;"
+        "                       border: 1px solid #d0d7de; padding: 4px; }"
+        "QScrollBar:vertical   { background: #f6f8fa; width: 8px; border-radius: 4px; }"
+        "QScrollBar::handle:vertical { background: #d0d7de; border-radius: 4px; }"
+        # Generic buttons — NO border-radius so jog pad shapes are unaffected
+        "QPushButton        { background-color: #f6f8fa; color: #24292f;"
+        "                     border: 1px solid #d0d7de; padding: 5px 12px; }"
+        "QPushButton:hover  { background-color: #eaeef2; border-color: #57606a; }"
+        "QPushButton:pressed{ background-color: #d0d7de; }"
+        "QPushButton:disabled { background-color: #f6f8fa; color: #8c959f; }"
+        "QCheckBox { color: #57606a; spacing: 6px; }"
+        "QLabel    { color: #57606a; }"
+        "QListWidget { background-color: #ffffff; color: #24292f; border: 1px solid #d0d7de; }"
     )
 
     def _apply_theme(self) -> None:
         app = QApplication.instance()
         if self._dark_mode:
             app.setStyleSheet(self._DARK_STYLESHEET)
-            self.setStyleSheet("")   # let app stylesheet handle everything
         else:
-            app.setStyleSheet("")    # revert to default Fusion light
+            app.setStyleSheet(self._LIGHT_STYLESHEET)
 
     def _on_toggle_theme(self) -> None:
         self._dark_mode = not self._dark_mode

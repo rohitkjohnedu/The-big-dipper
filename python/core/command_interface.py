@@ -349,6 +349,55 @@ class CommandInterface:
         self._mgr.send_command(cmd)
         self._wait_ack("JOG")
 
+    def jog_start(
+        self,
+        direction: str,
+        speed_mm_s: float,
+        accel_mm_s2: float = 0.0,
+    ) -> None:
+        """
+        Send ``CMD JOG`` without waiting for an ACK (fire-and-forget).
+
+        Designed for press-and-hold UI buttons where blocking on ACK would
+        cause the ``released`` event to fire immediately after unblocking,
+        stopping the motor before meaningful movement occurs.
+
+        The ``ACK JOG`` will still arrive on the response queue and will be
+        discarded by the next :meth:`_wait_ack` call — same behaviour as
+        :meth:`estop`.
+
+        Args:
+            direction:   ``"UP"`` or ``"DOWN"`` (case-sensitive).
+            speed_mm_s:  Jog speed in mm/s.
+            accel_mm_s2: Acceleration ramp in mm/s².  Omitted when ≤ 0.
+
+        Raises:
+            ValueError: If ``direction`` is not ``"UP"`` or ``"DOWN"``.
+        """
+        if direction not in _VALID_JOG_DIRECTIONS:
+            raise ValueError(
+                f"jog direction must be one of {sorted(_VALID_JOG_DIRECTIONS)}, "
+                f"got {direction!r}"
+            )
+        cmd: str
+        if accel_mm_s2 > 0:
+            cmd = f"CMD JOG {direction} {speed_mm_s:.4f} {accel_mm_s2:.4f}"
+        else:
+            cmd = f"CMD JOG {direction} {speed_mm_s:.4f}"
+        self._mgr.send_command(cmd)
+        log.debug("jog_start: %s", cmd)
+
+    def jog_stop(self) -> None:
+        """
+        Send ``CMD STOP`` without waiting for an ACK (fire-and-forget).
+
+        Paired with :meth:`jog_start` for press-and-hold jog buttons.
+        The ``ACK STOP`` will be discarded by the next :meth:`_wait_ack`
+        call, same as :meth:`estop`.
+        """
+        self._mgr.send_command("CMD STOP")
+        log.debug("jog_stop sent")
+
     def run(self, profile: DipProfile) -> None:
         """
         Execute a dip-coating run, choosing the correct command sequence
