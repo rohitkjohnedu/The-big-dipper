@@ -126,16 +126,22 @@ class ControlTab(QWidget):
         self._state = state
         self._update_buttons()
 
-    def set_profiles(self, profiles: list[DipProfile]) -> None:
+    def set_profiles(
+        self,
+        profiles:    list[DipProfile],
+        select_name: str | None = None,
+    ) -> None:
         """Populate the profile selector combo box.
 
         Args:
-            profiles: Ordered list of :class:`~core.profile.DipProfile`
-                      instances.  The currently selected index is preserved
-                      when the list is refreshed if the profile name still
-                      exists.
+            profiles:    Ordered list of :class:`~core.profile.DipProfile`
+                         instances.
+            select_name: Name of the profile to select after populating.
+                         If ``None``, the previously selected name is
+                         preserved when still present in the new list.
         """
-        prev_name: str = self._combo_profile.currentText()
+        prev_name: str = select_name if select_name is not None \
+                         else self._combo_profile.currentText()
         self._profiles = profiles
         self._combo_profile.clear()
         for p in profiles:

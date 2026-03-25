@@ -237,7 +237,8 @@ class MainWindow(QMainWindow):
 
     def _on_profile_selected(self, profile: DipProfile) -> None:
         """Forward a profile from ProfileManagerTab to ControlTab."""
-        self._tab_control.set_profiles([profile])
+        profiles = list_profiles(self._profile_dir)
+        self._tab_control.set_profiles(profiles, select_name=profile.name)
         self._tab_telem.notify_profile_name(profile.name)
         # Switch to the Control tab so the operator can immediately run it.
         self._tabs.setCurrentWidget(self._tab_control)
