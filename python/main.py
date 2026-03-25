@@ -82,19 +82,19 @@ def _parse_args() -> argparse.Namespace:
 def _setup_logging(log_dir: Path) -> None:
     """Configure root logger: INFO to console, DEBUG to rotating file."""
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "app.log"
+    log_file: Path = log_dir / "app.log"
 
-    root = logging.getLogger()
+    root: logging.Logger = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
     # Console handler — INFO and above
-    console = logging.StreamHandler(sys.stdout)
+    console: logging.StreamHandler = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter("%(levelname)-8s %(name)s: %(message)s"))
     root.addHandler(console)
 
     # Rotating file handler — DEBUG and above, 5 × 1 MB
-    file_handler = logging.handlers.RotatingFileHandler(
+    file_handler: logging.handlers.RotatingFileHandler = logging.handlers.RotatingFileHandler(
         log_file, maxBytes=1_048_576, backupCount=5, encoding="utf-8"
     )
     file_handler.setLevel(logging.DEBUG)
@@ -113,19 +113,19 @@ def _setup_logging(log_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    args = _parse_args()
+    args: argparse.Namespace = _parse_args()
 
-    profile_dir = Path(args.profile_dir)
-    log_dir     = Path(args.log_dir)
+    profile_dir: Path = Path(args.profile_dir)
+    log_dir:     Path = Path(args.log_dir)
 
     _setup_logging(log_dir)
 
-    app = QApplication(sys.argv)
+    app: QApplication = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName("Dip Coater Control")
     app.setOrganizationName("LMTS")
 
-    win = MainWindow(profile_dir=profile_dir, log_dir=log_dir)
+    win: MainWindow = MainWindow(profile_dir=profile_dir, log_dir=log_dir)
 
     # Pre-fill port field if --port was supplied
     if args.port:

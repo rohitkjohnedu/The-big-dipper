@@ -17,10 +17,10 @@ sys.path.insert(0, ".")
 
 from tests.mock_arduino import MockArduino
 
-TELEM_HZ    = 10
-SPEED_MULT  = 5.0    # 5× speed — a 4s move completes in ~0.8s
+TELEM_HZ:   int   = 10
+SPEED_MULT: float = 5.0    # 5× speed — a 4s move completes in ~0.8s
 
-mock = MockArduino(speed_multiplier=SPEED_MULT, telem_hz_default=TELEM_HZ)
+mock: MockArduino = MockArduino(speed_multiplier=SPEED_MULT, telem_hz_default=TELEM_HZ)
 mock.start()
 print(f"MockArduino started  (speed_multiplier={SPEED_MULT}, telem={TELEM_HZ} Hz)\n")
 
@@ -30,7 +30,7 @@ def send(cmd: str, expect_ack: bool = True) -> None:
     mock.send_command(cmd)
     if expect_ack:
         try:
-            resp = mock.response_queue.get(timeout=2.0)
+            resp: str = mock.response_queue.get(timeout=2.0)
             print(f"  RX: {resp}")
         except queue.Empty:
             print("  RX: (no response within 2 s)")
@@ -42,10 +42,11 @@ def drain_telem(seconds: float, label: str = "") -> None:
     """Print all TELEM frames that arrive over *seconds*."""
     if label:
         print(f"\n[{label}]")
-    deadline = time.monotonic() + seconds
+    deadline: float = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
-            f = mock.telem_queue.get(timeout=0.1)
+            from core.telemetry_parser import TelemetryFrame
+            f: TelemetryFrame = mock.telem_queue.get(timeout=0.1)
             print(
                 f"  TELEM  t={f.timestamp_ms:6d} ms  "
                 f"pos={f.pos_mm:7.2f} mm  "

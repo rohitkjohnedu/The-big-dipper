@@ -72,7 +72,7 @@ _LABEL_STYLE_BASE: Final[str] = (
 
 
 def _colored_label(text: str, bg: str) -> QLabel:
-    lbl = QLabel(text)
+    lbl: QLabel = QLabel(text)
     lbl.setStyleSheet(_LABEL_STYLE_BASE.format(bg=bg))
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return lbl
@@ -98,7 +98,7 @@ class StatusBar(QWidget):
         self._elapsed_s:  float = 0.0     # accumulated seconds (survives PAUSE)
 
         self._build_ui()
-        self._timer = QTimer(self)
+        self._timer: QTimer = QTimer(self)
         self._timer.setInterval(100)      # refresh elapsed display 10×/s
         self._timer.timeout.connect(self._tick_elapsed)
         self._timer.start()
@@ -143,32 +143,32 @@ class StatusBar(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QHBoxLayout(self)
+        layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
 
         # Port indicator
-        self._lbl_port = _colored_label(f"● {self._port}", _STATE_COLOR_DEFAULT)
+        self._lbl_port: QLabel = _colored_label(f"● {self._port}", _STATE_COLOR_DEFAULT)
         self._lbl_port.setToolTip("Serial port connection status")
 
         # State label
-        self._lbl_state = _colored_label("IDLE", _STATE_COLORS.get("IDLE", _STATE_COLOR_DEFAULT))
+        self._lbl_state: QLabel = _colored_label("IDLE", _STATE_COLORS.get("IDLE", _STATE_COLOR_DEFAULT))
         self._lbl_state.setMinimumWidth(90)
         self._lbl_state.setToolTip("Arduino machine state")
 
         # Phase label
-        self._lbl_phase = _colored_label("NONE", _STATE_COLOR_DEFAULT)
+        self._lbl_phase: QLabel = _colored_label("NONE", _STATE_COLOR_DEFAULT)
         self._lbl_phase.setMinimumWidth(110)
         self._lbl_phase.setToolTip("Current run phase")
 
         # Elapsed time
-        self._lbl_elapsed = _colored_label("00:00.0", _STATE_COLOR_DEFAULT)
+        self._lbl_elapsed: QLabel = _colored_label("00:00.0", _STATE_COLOR_DEFAULT)
         self._lbl_elapsed.setMinimumWidth(80)
         self._lbl_elapsed.setToolTip("Time spent in RUNNING state")
 
         # Thin vertical separators between fields
         def _sep() -> QFrame:
-            f = QFrame()
+            f: QFrame = QFrame()
             f.setFrameShape(QFrame.Shape.VLine)
             f.setStyleSheet("QFrame { color: #555555; }")
             return f

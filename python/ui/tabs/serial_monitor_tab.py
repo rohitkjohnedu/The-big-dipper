@@ -40,9 +40,10 @@ The tab polls ``mgr.raw_queue`` at 20 Hz via a ``QTimer``.
 from __future__ import annotations
 
 import logging
-from typing import Final, Optional
+import queue
+from typing import Callable, Final, Optional
 
-from PyQt6.QtCore import Qt, QStringListModel, QTimer
+from PyQt6.QtCore import Qt, QRect, QStringListModel, QTimer
 from PyQt6.QtGui import QBrush, QColor, QTextCursor, QKeyEvent
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QCompleter, QGroupBox, QHBoxLayout, QLabel,
@@ -125,11 +126,11 @@ def _other_rx_color(line: str) -> str:
 class _CommandInput(QPlainTextEdit):
     """Multi-line command input with autocomplete, history nav, and Ctrl+Enter send."""
 
-    def __init__(self, send_callback, parent=None) -> None:
+    def __init__(self, send_callback: Callable[[], None], parent=None) -> None:
         super().__init__(parent)
-        self._send_cb = send_callback
-        self._history: list[str] = []
-        self._hist_idx: int = -1
+        self._send_cb:  Callable[[], None] = send_callback
+        self._history:  list[str]          = []
+        self._hist_idx: int                = -1
 
         self.setPlaceholderText(
             "Type command(s), one per line.\n"
@@ -138,8 +139,8 @@ class _CommandInput(QPlainTextEdit):
         self.setFixedHeight(90)
         self.setFont(self.document().defaultFont())
 
-        self._model = QStringListModel(KNOWN_COMMANDS)
-        self._completer = QCompleter(self._model, self)
+        self._model:     QStringListModel = QStringListModel(KNOWN_COMMANDS)
+        self._completer: QCompleter       = QCompleter(self._model, self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self._completer.setWidget(self)
@@ -193,19 +194,19 @@ class _CommandInput(QPlainTextEdit):
         self._update_completer()
 
     def _current_line_text(self) -> str:
-        cursor = self.textCursor()
+        cursor: QTextCursor = self.textCursor()
         cursor.select(QTextCursor.SelectionType.LineUnderCursor)
         return cursor.selectedText()
 
     def _insert_completion(self, completion: str) -> None:
-        cursor = self.textCursor()
+        cursor: QTextCursor = self.textCursor()
         cursor.select(QTextCursor.SelectionType.LineUnderCursor)
         cursor.insertText(completion)
         self.setTextCursor(cursor)
         self._completer.popup().hide()
 
     def _move_cursor_end(self) -> None:
-        cursor = self.textCursor()
+        cursor: QTextCursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.setTextCursor(cursor)
 
@@ -218,7 +219,7 @@ class _CommandInput(QPlainTextEdit):
         if self._completer.completionCount() == 0:
             self._completer.popup().hide()
             return
-        rect = self.cursorRect()
+        rect: QRect = self.cursorRect()
         rect.setWidth(
             self._completer.popup().sizeHintForColumn(0)
             + self._completer.popup().verticalScrollBar().sizeHint().width()
@@ -364,11 +365,12 @@ class SerialMonitorTab(QWidget):
     def _on_send(self) -> None:
         if self._manager is None:
             return
-        raw_text = self._input.toPlainText()
-        lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+        raw_text: str       = self._input.toPlainText()
+        lines:    list[str] = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
         if not lines:
             return
 
+        line: str
         for line in lines:
             try:
                 self._manager.send_command(line)
@@ -376,17 +378,17 @@ class SerialMonitorTab(QWidget):
                 self._append_to(self._rx_list, f"ERR {exc}", _COL_ERR)
                 log.error("send_command(%r) failed: %s", line, exc)
 
-        batch = "\n".join(lines)
+        batch:   str             = "\n".join(lines)
         self._input.push_history(batch)
         self._input.clear()
 
-        preview = batch if len(batch) <= 60 else batch[:57] + "…"
-        item = QListWidgetItem(preview)
+        preview: str             = batch if len(batch) <= 60 else batch[:57] + "…"
+        item:    QListWidgetItem = QListWidgetItem(preview)
         item.setData(Qt.ItemDataRole.UserRole, batch)
         self._history_list.insertItem(0, item)
 
     def _on_quick_send(self) -> None:
-        cmd = self._combo_quick.currentText().strip()
+        cmd: str = self._combo_quick.currentText().strip()
         if not cmd or self._manager is None:
             return
         try:
@@ -417,10 +419,10 @@ class SerialMonitorTab(QWidget):
     def _poll_raw_queue(self) -> None:
         if self._manager is None:
             return
-        raw_q = getattr(self._manager, "raw_queue", None)
+        raw_q: Optional[queue.Queue[str]] = getattr(self._manager, "raw_queue", None)
         if raw_q is None:
             return
-        count = 0
+        count: int = 0
         while count < 50:
             try:
                 line: str = raw_q.get_nowait()

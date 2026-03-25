@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Final, Optional
 
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication, QHBoxLayout, QMainWindow, QMessageBox,
     QPushButton, QTabWidget, QVBoxLayout, QWidget,
@@ -125,13 +126,13 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
         # --- Tabs ----------------------------------------------------------
-        self._tab_control  = ControlTab()
-        self._tab_serial   = SerialMonitorTab()
-        self._tab_telem    = TelemetryTab(log_dir=self._log_dir)
-        self._tab_profiles = ProfileManagerTab(profile_dir=self._profile_dir)
-        self._tab_editor   = ProfileEditorTab()
+        self._tab_control:  ControlTab       = ControlTab()
+        self._tab_serial:   SerialMonitorTab = SerialMonitorTab()
+        self._tab_telem:    TelemetryTab     = TelemetryTab(log_dir=self._log_dir)
+        self._tab_profiles: ProfileManagerTab = ProfileManagerTab(profile_dir=self._profile_dir)
+        self._tab_editor:   ProfileEditorTab = ProfileEditorTab()
 
-        self._tabs = QTabWidget()
+        self._tabs: QTabWidget = QTabWidget()
         self._tabs.addTab(self._tab_control,  "Control")
         self._tabs.addTab(self._tab_serial,   "Serial Monitor")
         self._tabs.addTab(self._tab_telem,    "Telemetry")
@@ -139,29 +140,29 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._tab_editor,   "Profile Editor")
 
         # --- ESTOP ---------------------------------------------------------
-        self._estop = EstopButton(command_interface=None)   # updated on connect
+        self._estop: EstopButton = EstopButton(command_interface=None)   # updated on connect
         self._estop.setFixedHeight(52)
 
         # --- Status bar widget (inside central widget, above Qt status bar) -
-        self._status = StatusBar()
+        self._status: StatusBar = StatusBar()
 
         # --- Toolbar row ---------------------------------------------------
-        toolbar = QWidget()
-        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar:        QWidget     = QWidget()
+        toolbar_layout: QHBoxLayout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(4, 4, 4, 0)
         toolbar_layout.setSpacing(8)
         toolbar_layout.addWidget(self._estop)
         toolbar_layout.addStretch()
 
-        self._btn_theme = QPushButton("☀  Light")
+        self._btn_theme: QPushButton = QPushButton("☀  Light")
         self._btn_theme.setFixedWidth(90)
         self._btn_theme.setToolTip("Toggle light / dark theme")
         self._btn_theme.clicked.connect(self._on_toggle_theme)
         toolbar_layout.addWidget(self._btn_theme)
 
         # --- Central widget ------------------------------------------------
-        central = QWidget()
-        layout  = QVBoxLayout(central)
+        central: QWidget     = QWidget()
+        layout:  QVBoxLayout = QVBoxLayout(central)
         layout.setContentsMargins(6, 6, 6, 4)
         layout.setSpacing(4)
         layout.addWidget(toolbar)
@@ -175,7 +176,7 @@ class MainWindow(QMainWindow):
         self._tab_profiles.profile_selected.connect(self._on_profile_selected)
 
         # --- 20 Hz telemetry poll timer ------------------------------------
-        self._poll_timer = QTimer(self)
+        self._poll_timer: QTimer = QTimer(self)
         self._poll_timer.setInterval(50)
         self._poll_timer.timeout.connect(self._poll_telem)
         self._poll_timer.start()
@@ -354,7 +355,7 @@ class MainWindow(QMainWindow):
     # Cleanup
     # ------------------------------------------------------------------
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         self._poll_timer.stop()
         self._teardown_connection()
         super().closeEvent(event)

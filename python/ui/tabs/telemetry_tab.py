@@ -62,13 +62,13 @@ log: Final[logging.Logger] = logging.getLogger(__name__)
 
 def _readout_label(title: str, width: int = 110) -> tuple[QLabel, QLabel]:
     """Return a (title_label, value_label) pair for the readout strip."""
-    lbl_title = QLabel(title)
+    lbl_title: QLabel = QLabel(title)
     lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     lbl_title.setStyleSheet(
         "QLabel { color: #888888; font-size: 8pt; }"
     )
 
-    lbl_value = QLabel("—")
+    lbl_value: QLabel = QLabel("—")
     lbl_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
     lbl_value.setMinimumWidth(width)
     lbl_value.setStyleSheet(
@@ -159,9 +159,11 @@ class TelemetryTab(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
 
-        def _col(title, width=110):
-            t, v = _readout_label(title, width)
-            col = QVBoxLayout()
+        def _col(title: str, width: int = 110) -> QLabel:
+            t: QLabel
+            v: QLabel
+            t, v             = _readout_label(title, width)
+            col: QVBoxLayout = QVBoxLayout()
             col.setSpacing(1)
             col.addWidget(t)
             col.addWidget(v)

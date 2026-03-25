@@ -22,11 +22,11 @@ the plot and status bar.  A second timer runs a short demo sequence:
 import sys
 import queue
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel
+    QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget,
 )
-from PyQt6.QtCore import Qt
 
 sys.path.insert(0, ".")
 
@@ -46,23 +46,23 @@ class DemoWindow(QMainWindow):
         self.resize(900, 700)
 
         # --- Backend -------------------------------------------------------
-        self._mock = MockArduino(speed_multiplier=SPEED_MULT, telem_hz_default=10)
+        self._mock: MockArduino     = MockArduino(speed_multiplier=SPEED_MULT, telem_hz_default=10)
         self._mock.start()
-        self._ci = CommandInterface(self._mock)  # type: ignore[arg-type]
+        self._ci:   CommandInterface = CommandInterface(self._mock)  # type: ignore[arg-type]
 
         # --- Widgets -------------------------------------------------------
-        self._estop  = EstopButton(command_interface=self._ci)
-        self._status = StatusBar(port="MockArduino")
+        self._estop:  EstopButton = EstopButton(command_interface=self._ci)
+        self._status: StatusBar   = StatusBar(port="MockArduino")
         self._status.set_connected(True)
-        self._plot   = LivePlot(history_s=60.0, telem_hz=10)
+        self._plot:   LivePlot    = LivePlot(history_s=60.0, telem_hz=10)
 
         # Layout
-        central = QWidget()
-        layout  = QVBoxLayout(central)
+        central: QWidget     = QWidget()
+        layout:  QVBoxLayout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        hint = QLabel(
+        hint: QLabel = QLabel(
             "MockArduino running at 5x speed.  "
             "Click EMERGENCY STOP to halt at any time."
         )
@@ -78,14 +78,14 @@ class DemoWindow(QMainWindow):
         self.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
 
         # --- Telemetry poll timer (20 Hz) ----------------------------------
-        self._telem_timer = QTimer(self)
+        self._telem_timer: QTimer = QTimer(self)
         self._telem_timer.setInterval(50)
         self._telem_timer.timeout.connect(self._poll_telem)
         self._telem_timer.start()
 
         # --- Demo sequence timer -------------------------------------------
-        self._seq_step = 0
-        self._seq_timer = QTimer(self)
+        self._seq_step:  int   = 0
+        self._seq_timer: QTimer = QTimer(self)
         self._seq_timer.setSingleShot(True)
         self._seq_timer.timeout.connect(self._next_seq_step)
         self._seq_timer.start(500)   # first step after 0.5 s
@@ -94,9 +94,10 @@ class DemoWindow(QMainWindow):
 
     def _poll_telem(self) -> None:
         """Drain telem_queue and forward frames to plot + status bar."""
+        from core.telemetry_parser import TelemetryFrame
         while True:
             try:
-                frame = self._mock.telem_queue.get_nowait()
+                frame: TelemetryFrame = self._mock.telem_queue.get_nowait()
                 self._plot.push_frame(frame)
                 self._status.update_frame(frame)
             except queue.Empty:
@@ -104,7 +105,7 @@ class DemoWindow(QMainWindow):
 
     def _next_seq_step(self) -> None:
         """Advance through a simple repeating HOME → RUN_PROFILE loop."""
-        step = self._seq_step % 3
+        step: int = self._seq_step % 3
 
         if step == 0:
             # Home
@@ -130,7 +131,7 @@ class DemoWindow(QMainWindow):
         self._seq_step += 1
 
     @staticmethod
-    def _build_profile():
+    def _build_profile() -> "DipProfile":
         from core.profile import DipProfile
         return DipProfile(
             name                = "demo",
@@ -143,7 +144,7 @@ class DemoWindow(QMainWindow):
             n_dips              = 1,
         )
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         self._telem_timer.stop()
         self._seq_timer.stop()
         self._mock.stop()
@@ -151,8 +152,8 @@ class DemoWindow(QMainWindow):
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    app: QApplication = QApplication(sys.argv)
     app.setStyle("Fusion")
-    win = DemoWindow()
+    win: DemoWindow = DemoWindow()
     win.show()
     sys.exit(app.exec())

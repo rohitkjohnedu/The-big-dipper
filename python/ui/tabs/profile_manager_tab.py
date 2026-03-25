@@ -91,23 +91,23 @@ class _NewProfileDialog(QDialog):
         profile: DipProfile | None = None,
     ) -> None:
         super().__init__(parent)
-        self._source_profile = profile   # kept to preserve created_at on save
+        self._source_profile: DipProfile | None = profile   # kept to preserve created_at on save
         self.setWindowTitle("Edit Profile" if profile is not None else "New Profile")
         self.setMinimumWidth(360)
 
-        form = QFormLayout()
+        form: QFormLayout = QFormLayout()
         form.setSpacing(8)
 
-        self._name        = QLineEdit()
+        self._name:      QLineEdit      = QLineEdit()
         self._name.setPlaceholderText("e.g. silica_coat_v1")
-        self._dip_spd     = QDoubleSpinBox(); self._dip_spd.setRange(0.1, 100.0); self._dip_spd.setValue(5.0);   self._dip_spd.setSuffix(" mm/s")
-        self._wdraw_spd   = QDoubleSpinBox(); self._wdraw_spd.setRange(0.1, 100.0); self._wdraw_spd.setValue(5.0); self._wdraw_spd.setSuffix(" mm/s")
-        self._accel       = QDoubleSpinBox(); self._accel.setRange(1.0, 500.0); self._accel.setValue(20.0);      self._accel.setSuffix(" mm/s²")
-        self._depth       = QDoubleSpinBox(); self._depth.setRange(0.1, 880.0); self._depth.setValue(20.0);      self._depth.setSuffix(" mm")
-        self._dwell_bot   = QSpinBox();       self._dwell_bot.setRange(0, 60_000); self._dwell_bot.setValue(500);  self._dwell_bot.setSuffix(" ms")
-        self._dwell_top   = QSpinBox();       self._dwell_top.setRange(0, 60_000); self._dwell_top.setValue(200);  self._dwell_top.setSuffix(" ms")
-        self._n_dips      = QSpinBox();       self._n_dips.setRange(1, 100); self._n_dips.setValue(1)
-        self._notes       = QLineEdit()
+        self._dip_spd:   QDoubleSpinBox = QDoubleSpinBox(); self._dip_spd.setRange(0.1, 100.0); self._dip_spd.setValue(5.0);   self._dip_spd.setSuffix(" mm/s")
+        self._wdraw_spd: QDoubleSpinBox = QDoubleSpinBox(); self._wdraw_spd.setRange(0.1, 100.0); self._wdraw_spd.setValue(5.0); self._wdraw_spd.setSuffix(" mm/s")
+        self._accel:     QDoubleSpinBox = QDoubleSpinBox(); self._accel.setRange(1.0, 500.0); self._accel.setValue(20.0);      self._accel.setSuffix(" mm/s²")
+        self._depth:     QDoubleSpinBox = QDoubleSpinBox(); self._depth.setRange(0.1, 880.0); self._depth.setValue(20.0);      self._depth.setSuffix(" mm")
+        self._dwell_bot: QSpinBox       = QSpinBox();       self._dwell_bot.setRange(0, 60_000); self._dwell_bot.setValue(500);  self._dwell_bot.setSuffix(" ms")
+        self._dwell_top: QSpinBox       = QSpinBox();       self._dwell_top.setRange(0, 60_000); self._dwell_top.setValue(200);  self._dwell_top.setSuffix(" ms")
+        self._n_dips:    QSpinBox       = QSpinBox();       self._n_dips.setRange(1, 100); self._n_dips.setValue(1)
+        self._notes:     QLineEdit      = QLineEdit()
         self._notes.setPlaceholderText("Optional notes")
 
         # Pre-populate when editing an existing profile.
@@ -335,7 +335,7 @@ class ProfileManagerTab(QWidget):
 
     def _selected_row(self) -> int:
         """Return the currently selected row index, or -1 if none."""
-        rows = self._table.selectedItems()
+        rows: list[QTableWidgetItem] = self._table.selectedItems()
         if not rows:
             return -1
         return self._table.row(rows[0])

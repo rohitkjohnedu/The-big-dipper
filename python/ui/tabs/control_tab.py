@@ -62,8 +62,8 @@ class _RunWorker(QThread):
 
     def __init__(self, ci: CommandInterface, profile: DipProfile) -> None:
         super().__init__()
-        self._ci      = ci
-        self._profile = profile
+        self._ci:      CommandInterface = ci
+        self._profile: DipProfile       = profile
 
     def run(self) -> None:
         try:
@@ -375,8 +375,8 @@ class ControlTab(QWidget):
     # ------------------------------------------------------------------
 
     def _update_buttons(self) -> None:
-        connected = self._ci is not None
-        s         = self._state
+        connected: bool = self._ci is not None
+        s:         str  = self._state
 
         self._edit_port.setEnabled(not connected)
         self._spin_baud.setEnabled(not connected)

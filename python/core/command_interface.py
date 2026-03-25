@@ -549,7 +549,7 @@ class CommandInterface:
             CommandError: On ERR or timeout at any protocol step.
         """
         from motion.parabolic_profile import ParabolicProfile
-        from motion.velocity_profile import DEFAULT_SEGMENT_LENGTH_MM
+        from motion.velocity_profile import DEFAULT_SEGMENT_LENGTH_MM, MoveSegment
 
         depth:  float = profile.dip_depth_mm
         n_dips: int   = profile.n_dips
@@ -575,19 +575,19 @@ class CommandInterface:
         seg_len:            float = max(DEFAULT_SEGMENT_LENGTH_MM, min_seg_len)
 
         # Build descent and ascent profiles from the DipProfile's own fields.
-        descent = ParabolicProfile(
+        descent: ParabolicProfile = ParabolicProfile(
             target_speed_mm_s = profile.dip_speed_mm_s,
             distance_mm       = -depth,       # negative → toward substrate
             accel_mm_s2       = profile.accel_mm_s2,
         )
-        ascent = ParabolicProfile(
+        ascent: ParabolicProfile = ParabolicProfile(
             target_speed_mm_s = profile.withdraw_speed_mm_s,
             distance_mm       = depth,        # positive → away from substrate
             accel_mm_s2       = profile.accel_mm_s2,
         )
 
-        descent_segs = descent.to_segments(seg_len)
-        ascent_segs  = ascent.to_segments(seg_len)
+        descent_segs: list[MoveSegment] = descent.to_segments(seg_len)
+        ascent_segs:  list[MoveSegment] = ascent.to_segments(seg_len)
 
         # Assemble the full n_dips plan as a flat list of segment dicts.
         plan: list[dict[str, Any]] = []

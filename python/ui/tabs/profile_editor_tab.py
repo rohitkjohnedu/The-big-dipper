@@ -39,13 +39,13 @@ class ProfileEditorTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        lbl = QLabel(
+        lbl: QLabel = QLabel(
             "Spline profile editor\n\nNot yet implemented — coming in Step 27."
         )
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("color: #888888; font-size: 11pt;")
 
-        layout = QVBoxLayout(self)
+        layout: QVBoxLayout = QVBoxLayout(self)
         layout.addStretch()
         layout.addWidget(lbl)
         layout.addStretch()

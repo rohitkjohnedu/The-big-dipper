@@ -143,14 +143,15 @@ class LivePlot(QWidget):
         t_s: float = (frame.timestamp_ms - self._t0) / 1000.0
 
         # --- dt from previous frame ----------------------------------------
-        dt = (frame.timestamp_ms - self._prev_t_ms) / 1000.0 \
+        dt: float = (frame.timestamp_ms - self._prev_t_ms) / 1000.0 \
              if self._prev_t_ms is not None else 0.0
 
-        vel_actual = frame.vel_actual_mm_s
+        vel_actual: float = frame.vel_actual_mm_s
 
         # --- Noise floor: show commanded=0 when motor is stationary ---------
         # Firmware keeps last segment speed in vel_commanded during dwells.
-        _VEL_NOISE = 0.5  # mm/s
+        _VEL_NOISE: float = 0.5  # mm/s
+        vel_cmd_target: float
         if abs(vel_actual) < _VEL_NOISE:
             vel_cmd_target = 0.0
         else:
@@ -158,24 +159,24 @@ class LivePlot(QWidget):
 
         # --- EMA-smoothed acceleration from encoder velocity derivative ------
         if dt > 1e-6 and self._prev_vel_actual is not None:
-            raw_accel = (vel_actual - self._prev_vel_actual) / dt
+            raw_accel: float = (vel_actual - self._prev_vel_actual) / dt
             self._accel_ema = 0.25 * raw_accel + 0.75 * self._accel_ema
 
         # --- Ramp vel_cmd_display toward target at accel rate ----------------
         # On the very first frame dt=0 — leave _vel_cmd_display at 0 so the
         # ramp engages from the next real frame interval.
-        _MIN_RAMP_RATE = 20.0  # mm/s² minimum ramp rate when accel_ema ≈ 0
+        _MIN_RAMP_RATE: float = 20.0  # mm/s² minimum ramp rate when accel_ema ≈ 0
         if dt > 1e-6:
-            ramp_rate = max(abs(self._accel_ema), _MIN_RAMP_RATE)
-            delta     = vel_cmd_target - self._vel_cmd_display
-            max_step  = ramp_rate * dt
+            ramp_rate: float = max(abs(self._accel_ema), _MIN_RAMP_RATE)
+            delta:     float = vel_cmd_target - self._vel_cmd_display
+            max_step:  float = ramp_rate * dt
             if abs(delta) <= max_step:
                 self._vel_cmd_display = vel_cmd_target
             else:
                 self._vel_cmd_display += math.copysign(max_step, delta)
 
-        vel_cmd   = self._vel_cmd_display
-        accel_out = self._accel_ema
+        vel_cmd:   float = self._vel_cmd_display
+        accel_out: float = self._accel_ema
 
         self._prev_t_ms       = frame.timestamp_ms
         self._prev_vel_actual = vel_actual
@@ -289,8 +290,8 @@ class LivePlot(QWidget):
         layout.addWidget(self._glw, stretch=1)
 
     def _build_toolbar(self) -> QWidget:
-        bar    = QWidget()
-        row    = QHBoxLayout(bar)
+        bar: QWidget     = QWidget()
+        row: QHBoxLayout = QHBoxLayout(bar)
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(6)
 
@@ -369,8 +370,8 @@ class LivePlot(QWidget):
             self._redraw()
 
     def _update_mode_style(self) -> None:
-        active   = "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
-        inactive = ""
+        active:   str = "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
+        inactive: str = ""
         self._btn_window.setStyleSheet(active if self._btn_window.isChecked() else inactive)
         self._btn_full.setStyleSheet(active   if self._btn_full.isChecked()   else inactive)
 
@@ -379,27 +380,33 @@ class LivePlot(QWidget):
     # ------------------------------------------------------------------
 
     def _redraw(self) -> None:
+        t:       list[float]
+        pos:     list[float]
+        vel_cmd: list[float]
+        vel_act: list[float]
+        accel:   list[float]
+
         if self._btn_full.isChecked():
             # Full history — use all data collected since last clear()
-            t        = self._all_t
-            pos      = self._all_pos
-            vel_cmd  = self._all_vel_cmd
-            vel_act  = self._all_vel_act
-            accel    = self._all_accel
+            t       = self._all_t
+            pos     = self._all_pos
+            vel_cmd = self._all_vel_cmd
+            vel_act = self._all_vel_act
+            accel   = self._all_accel
         else:
             # Window mode — use the rolling deques (already bounded by maxlen)
-            t        = list(self._t)
-            pos      = list(self._pos)
-            vel_cmd  = list(self._vel_cmd)
-            vel_act  = list(self._vel_act)
-            accel    = list(self._accel)
+            t       = list(self._t)
+            pos     = list(self._pos)
+            vel_cmd = list(self._vel_cmd)
+            vel_act = list(self._vel_act)
+            accel   = list(self._accel)
 
             # Trim to the spinbox window if data is older than requested duration
-            win_s = float(self._spin_window.value())
+            win_s: float = float(self._spin_window.value())
             if t and (t[-1] - t[0]) > win_s:
                 import bisect
-                cutoff = t[-1] - win_s
-                idx    = bisect.bisect_left(t, cutoff)
+                cutoff: float = t[-1] - win_s
+                idx:    int   = bisect.bisect_left(t, cutoff)
                 t       = t[idx:]
                 pos     = pos[idx:]
                 vel_cmd = vel_cmd[idx:]
