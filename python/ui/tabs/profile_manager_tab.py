@@ -79,11 +79,20 @@ _HEADERS = ("Name", "Dip (mm/s)", "Wdraw (mm/s)", "Accel (mm/s²)",
 # ---------------------------------------------------------------------------
 
 class _NewProfileDialog(QDialog):
-    """Modal form for creating a new DipProfile."""
+    """Modal form for creating or editing a DipProfile.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    Pass ``profile`` to pre-populate all fields (edit mode).
+    Leave it ``None`` to start with defaults (new mode).
+    """
+
+    def __init__(
+        self,
+        parent:  QWidget | None = None,
+        profile: DipProfile | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("New Profile")
+        self._source_profile = profile   # kept to preserve created_at on save
+        self.setWindowTitle("Edit Profile" if profile is not None else "New Profile")
         self.setMinimumWidth(360)
 
         form = QFormLayout()
@@ -100,6 +109,18 @@ class _NewProfileDialog(QDialog):
         self._n_dips      = QSpinBox();       self._n_dips.setRange(1, 100); self._n_dips.setValue(1)
         self._notes       = QLineEdit()
         self._notes.setPlaceholderText("Optional notes")
+
+        # Pre-populate when editing an existing profile.
+        if profile is not None:
+            self._name.setText(profile.name)
+            self._dip_spd.setValue(profile.dip_speed_mm_s)
+            self._wdraw_spd.setValue(profile.withdraw_speed_mm_s)
+            self._accel.setValue(profile.accel_mm_s2)
+            self._depth.setValue(profile.dip_depth_mm)
+            self._dwell_bot.setValue(profile.dwell_bottom_ms)
+            self._dwell_top.setValue(profile.dwell_top_ms)
+            self._n_dips.setValue(profile.n_dips)
+            self._notes.setText(profile.notes)
 
         form.addRow("Name *",          self._name)
         form.addRow("Dip speed *",     self._dip_spd)
@@ -125,6 +146,8 @@ class _NewProfileDialog(QDialog):
     def get_profile(self) -> DipProfile:
         """Return a DipProfile built from the form values.
 
+        When editing, ``created_at`` is preserved from the original profile.
+
         Raises:
             ValueError: If any field fails DipProfile validation.
         """
@@ -138,6 +161,8 @@ class _NewProfileDialog(QDialog):
             dwell_top_ms         = self._dwell_top.value(),
             n_dips               = self._n_dips.value(),
             notes                = self._notes.text(),
+            # Preserve original timestamp when editing; blank triggers a fresh stamp.
+            created_at           = self._source_profile.created_at if self._source_profile else "",
         )
 
 
@@ -248,6 +273,12 @@ class ProfileManagerTab(QWidget):
         self._btn_new.clicked.connect(self._on_new)
         row.addWidget(self._btn_new)
 
+        self._btn_edit = QPushButton("Edit")
+        self._btn_edit.setToolTip("Edit the selected profile's parameters")
+        self._btn_edit.setEnabled(False)
+        self._btn_edit.clicked.connect(self._on_edit)
+        row.addWidget(self._btn_edit)
+
         self._btn_duplicate = QPushButton("Duplicate")
         self._btn_duplicate.setToolTip("Duplicate the selected profile")
         self._btn_duplicate.setEnabled(False)
@@ -326,6 +357,7 @@ class ProfileManagerTab(QWidget):
 
     def _on_selection_changed(self) -> None:
         has_sel = self._selected_row() >= 0
+        self._btn_edit.setEnabled(has_sel)
         self._btn_duplicate.setEnabled(has_sel)
         self._btn_rename.setEnabled(has_sel)
         self._btn_delete.setEnabled(has_sel)
@@ -356,6 +388,34 @@ class ProfileManagerTab(QWidget):
             return
         self.refresh()
         log.info("new profile saved: %s", path)
+
+    def _on_edit(self) -> None:
+        profile = self._selected_profile()
+        if profile is None:
+            return
+        old_path = self._profile_path(profile)
+        dlg = _NewProfileDialog(self, profile=profile)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            updated = dlg.get_profile()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid profile", str(exc))
+            return
+        new_path = self._profile_path(updated)
+        if new_path != old_path and new_path.exists():
+            QMessageBox.warning(self, "Name in use",
+                                f"{new_path.name} already exists. Choose a different name.")
+            return
+        try:
+            save_profile(updated, new_path)
+            if new_path != old_path and old_path.exists():
+                old_path.unlink()
+        except OSError as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return
+        self.refresh()
+        log.info("profile edited: %s", new_path)
 
     def _on_duplicate(self) -> None:
         profile = self._selected_profile()
