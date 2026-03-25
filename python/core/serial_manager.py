@@ -321,9 +321,18 @@ class SerialManager:
             # --- Route to the appropriate queue ------------------------------
             if line.startswith("TELEM,"):
                 # Parse and enqueue — malformed lines return None and are dropped.
+                # put_nowait() avoids blocking the read loop if the consumer (UI)
+                # falls behind; a full queue drops the frame rather than stalling
+                # the UART, which could overflow the hardware RX buffer.
                 frame: Optional[TelemetryFrame] = _parse_telem(line)
                 if frame is not None:
-                    self.telem_queue.put(frame)
+                    try:
+                        self.telem_queue.put_nowait(frame)
+                    except queue.Full:
+                        log.warning("telem_queue full — frame dropped")
             else:
                 # ACK, ERR, STATE, or any freeform print from the firmware.
-                self.response_queue.put(line)
+                try:
+                    self.response_queue.put_nowait(line)
+                except queue.Full:
+                    log.warning("response_queue full — line dropped: %r", line)

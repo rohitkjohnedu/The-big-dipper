@@ -43,6 +43,7 @@ are shown in a ``QMessageBox``.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Final, Optional
 
@@ -316,7 +317,7 @@ class ProfileManagerTab(QWidget):
 
     def _profile_path(self, profile: DipProfile) -> Path:
         """Return the expected JSON path for a profile."""
-        safe = profile.name.strip().replace(" ", "_")
+        safe = re.sub(r'[\\/:*?"<>| ]', "_", profile.name.strip()).strip("_") or "unnamed"
         return self._profile_dir / f"{safe}.json"
 
     # ------------------------------------------------------------------

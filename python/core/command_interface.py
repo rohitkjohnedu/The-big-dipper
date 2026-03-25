@@ -430,6 +430,8 @@ class CommandInterface:
 
         if vtype == "trapezoidal":
             self._run_trapezoidal(profile)
+        elif vtype == "parabolic":
+            self._run_parabolic(profile)
         elif vtype == "segmented":
             self._run_segmented(profile)
         elif vtype == "spline":
@@ -523,6 +525,100 @@ class CommandInterface:
         self._mgr.send_command(cmd)
         self._wait_ack("RUN_PROFILE")
 
+    def _run_parabolic(self, profile: DipProfile) -> None:
+        """
+        Build a full parabolic dip cycle from ``DipProfile`` parameters and
+        stream it via the segmented-move protocol.
+
+        Uses :class:`~motion.parabolic_profile.ParabolicProfile` to discretise
+        each descent and ascent into ``CMD MOVE_SEG`` commands, then interleaves
+        ``CMD DWELL_SEG`` commands for bottom/top dwell periods.  The full
+        ``n_dips``-cycle plan is validated against the Arduino segment buffer
+        before any serial communication begins.
+
+        Segment length is chosen adaptively so the total segment count fits
+        within :data:`MOVE_SEG_BUFFER_SIZE` — a larger segment length is used
+        automatically for deep or multi-dip profiles.
+
+        Args:
+            profile: A ``DipProfile`` with ``velocity_profile_type == "parabolic"``.
+
+        Raises:
+            ValueError:   If n_dips is too high to fit even 1 segment per
+                          direction per dip within the buffer.
+            CommandError: On ERR or timeout at any protocol step.
+        """
+        from motion.parabolic_profile import ParabolicProfile
+        from motion.velocity_profile import DEFAULT_SEGMENT_LENGTH_MM
+
+        depth:  float = profile.dip_depth_mm
+        n_dips: int   = profile.n_dips
+
+        # Count the fixed dwell slots so we know how many move-segment slots remain.
+        dwell_bot_count: int = 1 if profile.dwell_bottom_ms > 0 else 0
+        dwell_top_count: int = 1 if profile.dwell_top_ms    > 0 else 0
+        # dwell_top is inserted between dips, not after the last one.
+        total_dwell_segs: int = n_dips * dwell_bot_count + (n_dips - 1) * dwell_top_count
+
+        move_slots: int = MOVE_SEG_BUFFER_SIZE - total_dwell_segs
+        if move_slots < 2 * n_dips:
+            raise ValueError(
+                f"Not enough segment buffer space for {n_dips} parabolic dip(s): "
+                f"need at least {2 * n_dips} move slots, "
+                f"have {move_slots} (MOVE_SEG_BUFFER_SIZE={MOVE_SEG_BUFFER_SIZE})"
+            )
+
+        # Choose segment length: at least DEFAULT_SEGMENT_LENGTH_MM, but scaled
+        # up automatically so each direction fits in its share of the buffer.
+        segs_per_direction: int   = move_slots // (2 * n_dips)
+        min_seg_len:        float = depth / segs_per_direction
+        seg_len:            float = max(DEFAULT_SEGMENT_LENGTH_MM, min_seg_len)
+
+        # Build descent and ascent profiles from the DipProfile's own fields.
+        descent = ParabolicProfile(
+            target_speed_mm_s = profile.dip_speed_mm_s,
+            distance_mm       = -depth,       # negative → toward substrate
+            accel_mm_s2       = profile.accel_mm_s2,
+        )
+        ascent = ParabolicProfile(
+            target_speed_mm_s = profile.withdraw_speed_mm_s,
+            distance_mm       = depth,        # positive → away from substrate
+            accel_mm_s2       = profile.accel_mm_s2,
+        )
+
+        descent_segs = descent.to_segments(seg_len)
+        ascent_segs  = ascent.to_segments(seg_len)
+
+        # Assemble the full n_dips plan as a flat list of segment dicts.
+        plan: list[dict[str, Any]] = []
+        for dip_i in range(n_dips):
+            for s in descent_segs:
+                plan.append({
+                    "type":        "move",
+                    "distance_mm": s.distance_mm,
+                    "speed_mm_s":  s.speed_mm_s,
+                    "accel_mm_s2": s.accel_mm_s2,
+                })
+            if profile.dwell_bottom_ms > 0:
+                plan.append({"type": "dwell", "duration_ms": profile.dwell_bottom_ms})
+            for s in ascent_segs:
+                plan.append({
+                    "type":        "move",
+                    "distance_mm": s.distance_mm,
+                    "speed_mm_s":  s.speed_mm_s,
+                    "accel_mm_s2": s.accel_mm_s2,
+                })
+            if profile.dwell_top_ms > 0 and dip_i < n_dips - 1:
+                plan.append({"type": "dwell", "duration_ms": profile.dwell_top_ms})
+
+        if len(plan) > MOVE_SEG_BUFFER_SIZE:
+            raise ValueError(
+                f"Computed parabolic plan has {len(plan)} segments, "
+                f"exceeding MOVE_SEG_BUFFER_SIZE ({MOVE_SEG_BUFFER_SIZE})"
+            )
+
+        self._stream_segment_plan(plan)
+
     def _run_segmented(self, profile: DipProfile) -> None:
         """
         Stream a segmented profile to the Arduino and trigger execution.
@@ -565,6 +661,32 @@ class CommandInterface:
                 f"MOVE_SEG_BUFFER_SIZE ({MOVE_SEG_BUFFER_SIZE})"
             )
 
+        self._stream_segment_plan(segments)
+
+    def _stream_segment_plan(self, segments: list[dict[str, Any]]) -> None:
+        """
+        Execute the BEGIN_SEGMENTED_MOVE → stream → RUN_LOADED_MOVE protocol
+        for a pre-validated list of segment dicts.
+
+        Each dict must have ``"type"`` equal to ``"move"`` or ``"dwell"``.
+        Move dicts additionally need ``"distance_mm"``, ``"speed_mm_s"``, and
+        optionally ``"accel_mm_s2"``.  Dwell dicts need ``"duration_ms"``.
+
+        This helper is shared by :meth:`_run_segmented` (which reads pre-stored
+        segment dicts from ``velocity_profile_data``) and :meth:`_run_parabolic`
+        (which computes segment dicts on the fly from the parabolic formula).
+
+        Args:
+            segments: Non-empty list of segment dicts.  Length must be ≤
+                      :data:`MOVE_SEG_BUFFER_SIZE` — callers are responsible
+                      for checking before calling this method.
+
+        Raises:
+            ValueError:   If an unknown segment type is encountered.
+            CommandError: On ERR or timeout at any protocol step.
+        """
+        n_segs: int = len(segments)
+
         # --- Step 1: announce segment count, enter Arduino collection mode ----
         self._mgr.send_command(f"CMD BEGIN_SEGMENTED_MOVE {n_segs}")
         self._wait_ack("BEGIN_SEGMENTED_MOVE")
@@ -573,8 +695,7 @@ class CommandInterface:
         # The Arduino counts received segments internally; no ACK per segment.
         # INTER_SEGMENT_DELAY_S is inserted after each send to prevent the
         # serial RX buffer from overflowing before loop() drains it.
-        seg: dict[str, Any]
-        for seg in segments:
+        for i, seg in enumerate(segments):
             seg_type: str = str(seg.get("type", ""))
 
             if seg_type == "move":
@@ -598,12 +719,8 @@ class CommandInterface:
                 self._mgr.send_command(f"CMD DWELL_SEG {duration_ms}")
 
             else:
-                # The profile validator should have caught this already, but
-                # guard here in case velocity_profile_data was mutated after
-                # construction.
                 raise ValueError(
-                    f"Unknown segment type {seg_type!r} at index "
-                    f"{segments.index(seg)}"
+                    f"Unknown segment type {seg_type!r} at index {i}"
                 )
 
             # Pause to let the Arduino's loop() drain the RX buffer before

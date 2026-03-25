@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         self._tab_control.set_command_interface(ci)
         self._tab_telem.set_command_interface(ci)
         self._tab_serial.set_manager(self._manager)           # type: ignore[arg-type]
-        self._estop._ci = ci                                   # update ESTOP target
+        self._estop.set_command_interface(ci)
 
     # ------------------------------------------------------------------
     # Private — profile selection

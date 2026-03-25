@@ -60,21 +60,26 @@ class EstopButton(QPushButton):
     Args:
         command_interface: A live :class:`~core.command_interface.CommandInterface`
                            instance whose :meth:`~core.command_interface.CommandInterface.estop`
-                           is called on every click.
+                           is called on every click.  May be ``None`` when
+                           disconnected — clicks are silently ignored.
         parent:            Optional parent widget.
     """
 
     def __init__(
         self,
-        command_interface: CommandInterface,
+        command_interface: "CommandInterface | None",
         parent=None,
     ) -> None:
         super().__init__("EMERGENCY STOP", parent)
-        self._ci: CommandInterface = command_interface
+        self._ci: "CommandInterface | None" = command_interface
         self._apply_style()
         self.clicked.connect(self._on_clicked)
 
     # ------------------------------------------------------------------
+
+    def set_command_interface(self, ci: "CommandInterface | None") -> None:
+        """Update the target command interface (call on connect / disconnect)."""
+        self._ci = ci
 
     def _apply_style(self) -> None:
         self.setStyleSheet(_STYLE)
@@ -88,5 +93,8 @@ class EstopButton(QPushButton):
         )
 
     def _on_clicked(self) -> None:
+        if self._ci is None:
+            log.warning("EstopButton clicked but no command interface set — ignored")
+            return
         log.warning("EstopButton clicked — sending ESTOP")
         self._ci.estop()

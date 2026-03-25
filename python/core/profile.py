@@ -59,6 +59,7 @@ log: Final[logging.Logger] = logging.getLogger(__name__)
 # Set of accepted velocity_profile_type strings.
 _VALID_PROFILE_TYPES: Final[frozenset[str]] = frozenset({
     "trapezoidal",
+    "parabolic",
     "segmented",
     "spline",
 })
