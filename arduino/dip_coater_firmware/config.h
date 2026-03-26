@@ -92,7 +92,7 @@
 // TPOWERDOWN — delay before hold current activates after standstill (~2 ms per count).
 //   Prevents the audible click when the motor stops.  10 ≈ 20 ms.
 
-#define STEALTH_TPWMTHRS         521        ///< Crossover at ~3 mm/s
+#define STEALTH_TPWMTHRS         312        ///< Crossover at ~5 mm/s
 #define STEALTH_TPOWERDOWN        10        ///< ~20 ms hold-current delay
 
 // =============================================================================
