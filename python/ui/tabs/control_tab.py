@@ -157,6 +157,7 @@ class ControlTab(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Stack the three group boxes (Connection, Manual Control, Run Profile) vertically."""
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.setSpacing(8)
@@ -166,6 +167,7 @@ class ControlTab(QWidget):
         layout.addStretch()
 
     def _build_connection_group(self) -> QGroupBox:
+        """Build the port / baud-rate entry row and the Connect/Disconnect button."""
         grp = QGroupBox("Connection")
         row = QHBoxLayout(grp)
         row.setSpacing(6)
@@ -193,6 +195,7 @@ class ControlTab(QWidget):
         return grp
 
     def _build_manual_group(self) -> QGroupBox:
+        """Build the jog pad and jog-parameter spinboxes inside a group box."""
         grp = QGroupBox("Manual Control")
         outer = QVBoxLayout(grp)
         outer.setSpacing(8)
@@ -343,6 +346,7 @@ class ControlTab(QWidget):
         return row
 
     def _build_run_group(self) -> QGroupBox:
+        """Build the profile combo box and Run / Pause / Resume buttons inside a group box."""
         grp = QGroupBox("Run Profile")
         layout = QVBoxLayout(grp)
         layout.setSpacing(6)
@@ -375,30 +379,63 @@ class ControlTab(QWidget):
     # ------------------------------------------------------------------
 
     def _update_buttons(self) -> None:
-        connected: bool = self._ci is not None
-        s:         str  = self._state
+        """Enable or disable every interactive control based on connection state and Arduino state.
 
+        Called whenever :attr:`_ci` or :attr:`_state` changes.  The rules are:
+
+        * Port / baud fields — editable only when disconnected.
+        * Home — allowed from IDLE, READY, or ERROR (recovery).
+        * Stop — allowed from RUNNING, PAUSED, or READY.
+        * Jog — allowed only from READY.
+        * Run — allowed only from READY and only when at least one profile is loaded.
+        * Pause — allowed only from RUNNING.
+        * Resume — allowed only from PAUSED.
+        * Profile combo — locked during RUNNING and HOMING to prevent mid-move changes.
+        """
+        connected:     bool = self._ci is not None
+        arduino_state: str  = self._state
+
+        # Connection fields are read-only once a port is open.
         self._edit_port.setEnabled(not connected)
         self._spin_baud.setEnabled(not connected)
 
-        self._btn_home.setEnabled(connected and s in ("IDLE", "READY", "ERROR"))
-        self._btn_stop.setEnabled(connected and s in ("RUNNING", "PAUSED", "READY"))
+        # Motion commands — validity depends on current Arduino state.
+        self._btn_home.setEnabled(
+            connected and arduino_state in ("IDLE", "READY", "ERROR")
+        )
+        self._btn_stop.setEnabled(
+            connected and arduino_state in ("RUNNING", "PAUSED", "READY")
+        )
 
-        jog_ok = connected and s == "READY"
+        # Jogging is only safe when the axis is stationary and homed.
+        jog_ok: bool = connected and arduino_state == "READY"
         self._btn_jog_up.setEnabled(jog_ok)
         self._btn_jog_down.setEnabled(jog_ok)
 
-        has_profiles = len(self._profiles) > 0
-        self._btn_run.setEnabled(connected    and s == "READY" and has_profiles)
-        self._btn_pause.setEnabled(connected  and s == "RUNNING")
-        self._btn_resume.setEnabled(connected and s == "PAUSED")
-        self._combo_profile.setEnabled(connected and s not in ("RUNNING", "HOMING"))
+        # Profile execution buttons.
+        has_profiles: bool = len(self._profiles) > 0
+        self._btn_run.setEnabled(
+            connected and arduino_state == "READY" and has_profiles
+        )
+        self._btn_pause.setEnabled(connected  and arduino_state == "RUNNING")
+        self._btn_resume.setEnabled(connected and arduino_state == "PAUSED")
+
+        # Lock the combo during motion so the operator cannot swap profiles mid-run.
+        self._combo_profile.setEnabled(
+            connected and arduino_state not in ("RUNNING", "HOMING")
+        )
 
     # ------------------------------------------------------------------
     # Private — slot handlers
     # ------------------------------------------------------------------
 
     def _on_connect_clicked(self) -> None:
+        """Emit the appropriate connection signal depending on the current state.
+
+        If no command interface is set (disconnected), emits :attr:`connect_requested`
+        with the port name and baud rate from the UI fields.  If already connected,
+        emits :attr:`disconnect_requested`.
+        """
         if self._ci is None:
             self.connect_requested.emit(
                 self._edit_port.text().strip(),
@@ -408,6 +445,7 @@ class ControlTab(QWidget):
             self.disconnect_requested.emit()
 
     def _on_home(self) -> None:
+        """Send CMD HOME to drive the axis to the endstop and zero the encoder."""
         if self._ci is None:
             return
         try:
@@ -416,6 +454,7 @@ class ControlTab(QWidget):
             self._show_error("Home failed", str(exc))
 
     def _on_stop(self) -> None:
+        """Send CMD STOP for a controlled decelerated halt."""
         if self._ci is None:
             return
         try:
@@ -424,31 +463,46 @@ class ControlTab(QWidget):
             self._show_error("Stop failed", str(exc))
 
     def _on_jog_up_pressed(self) -> None:
+        """Start continuous upward jog at the speed and acceleration set in the spinboxes."""
         if self._ci is None:
             return
         try:
-            self._ci.jog_start("UP",
-                                self._spin_jog_spd.value(),
-                                self._spin_jog_accel.value())
+            self._ci.jog_start(
+                "UP",
+                self._spin_jog_spd.value(),
+                self._spin_jog_accel.value(),
+            )
         except (CommandError, ValueError) as exc:
             log.warning("Jog UP failed: %s", exc)
 
     def _on_jog_down_pressed(self) -> None:
+        """Start continuous downward jog at the speed and acceleration set in the spinboxes."""
         if self._ci is None:
             return
         try:
-            self._ci.jog_start("DOWN",
-                                self._spin_jog_spd.value(),
-                                self._spin_jog_accel.value())
+            self._ci.jog_start(
+                "DOWN",
+                self._spin_jog_spd.value(),
+                self._spin_jog_accel.value(),
+            )
         except (CommandError, ValueError) as exc:
             log.warning("Jog DOWN failed: %s", exc)
 
     def _on_run(self) -> None:
+        """Spawn a _RunWorker thread to execute the selected profile without blocking the UI.
+
+        The worker emits ``error(str)`` on failure; that signal is wired to
+        :meth:`_show_error` so the operator sees a dialog if something goes wrong.
+        """
         if self._ci is None or self._combo_profile.currentIndex() < 0:
             return
+
+        # Resolve the selected profile object from the combo index.
         idx:     int        = self._combo_profile.currentIndex()
         profile: DipProfile = self._profiles[idx]
         log.info("Starting run: %s", profile.name)
+
+        # Run the blocking profile-streaming call in a background thread.
         self._run_worker = _RunWorker(self._ci, profile)
         self._run_worker.error.connect(
             lambda msg: self._show_error("Run failed", msg)
@@ -456,6 +510,7 @@ class ControlTab(QWidget):
         self._run_worker.start()
 
     def _on_pause(self) -> None:
+        """Send CMD PAUSE to suspend the active profile at the current position."""
         if self._ci is None:
             return
         try:
@@ -464,6 +519,7 @@ class ControlTab(QWidget):
             self._show_error("Pause failed", str(exc))
 
     def _on_resume(self) -> None:
+        """Send CMD RESUME to continue a paused profile from where it stopped."""
         if self._ci is None:
             return
         try:
@@ -472,5 +528,11 @@ class ControlTab(QWidget):
             self._show_error("Resume failed", str(exc))
 
     def _show_error(self, title: str, msg: str) -> None:
+        """Log *msg* at ERROR level and display a warning dialog to the operator.
+
+        Args:
+            title: Dialog window title and log prefix.
+            msg:   Human-readable error description.
+        """
         log.error("%s: %s", title, msg)
         QMessageBox.warning(self, title, msg)

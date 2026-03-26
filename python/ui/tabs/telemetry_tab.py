@@ -144,76 +144,109 @@ class TelemetryTab(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Assemble the tab layout: readout strip on top, live plot in the middle, toolbar at bottom."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
+        # Numeric readout strip — always visible at the top.
         layout.addWidget(self._build_readout_strip())
+
+        # Scrolling live plot — expands to fill remaining vertical space.
         self._plot = LivePlot(history_s=120.0, telem_hz=10)
         layout.addWidget(self._plot, stretch=1)
+
+        # Toolbar — telem rate, recording controls, export, clear.
         layout.addWidget(self._build_toolbar())
 
     def _build_readout_strip(self) -> QWidget:
-        strip = QWidget()
-        row   = QHBoxLayout(strip)
+        """Create the horizontal numeric readout strip and return it as a widget.
+
+        Each readout column is a small titled box showing the latest value for
+        one telemetry channel.  The columns are added left-to-right in the order:
+        position, actual velocity, commanded velocity, acceleration, state, phase,
+        frame counter.
+        """
+        strip: QWidget     = QWidget()
+        row:   QHBoxLayout = QHBoxLayout(strip)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
 
         def _col(title: str, width: int = 110) -> QLabel:
-            t: QLabel
-            v: QLabel
-            t, v             = _readout_label(title, width)
-            col: QVBoxLayout = QVBoxLayout()
-            col.setSpacing(1)
-            col.addWidget(t)
-            col.addWidget(v)
-            row.addLayout(col)
-            return v
+            """Create one titled readout column, add it to *row*, and return the value label.
 
-        self._lbl_pos      = _col("Position (mm)",  120)
+            Args:
+                title: Header text shown above the numeric value.
+                width: Minimum pixel width of the value label.
+
+            Returns:
+                The ``QLabel`` whose text will be updated on every telemetry frame.
+            """
+            title_label: QLabel
+            value_label: QLabel
+            title_label, value_label = _readout_label(title, width)
+
+            # Stack the title above the value in a tight vertical column.
+            column: QVBoxLayout = QVBoxLayout()
+            column.setSpacing(1)
+            column.addWidget(title_label)
+            column.addWidget(value_label)
+            row.addLayout(column)
+            return value_label
+
+        # One column per telemetry channel, in display order.
+        self._lbl_pos      = _col("Position (mm)",          120)
         self._lbl_vel_act  = _col("Vel Actual (mm/s)")
-        self._lbl_vel_cmd  = _col("Vel Commanded (mm/s)", 130)
+        self._lbl_vel_cmd  = _col("Vel Commanded (mm/s)",   130)
         self._lbl_accel    = _col("Accel (mm/s²)")
-        self._lbl_state    = _col("State",  90)
-        self._lbl_phase    = _col("Phase", 120)
-        self._lbl_frames   = _col("Frames",  80)
+        self._lbl_state    = _col("State",                   90)
+        self._lbl_phase    = _col("Phase",                  120)
+        self._lbl_frames   = _col("Frames",                  80)
         row.addStretch()
         return strip
 
     def _build_toolbar(self) -> QWidget:
-        bar    = QWidget()
-        layout = QHBoxLayout(bar)
+        """Create the bottom toolbar with telem-rate controls, record toggle, PNG export, and clear.
+
+        Returns:
+            A ``QWidget`` containing the complete toolbar row.
+        """
+        bar:    QWidget     = QWidget()
+        layout: QHBoxLayout = QHBoxLayout(bar)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # Telem rate
+        # --- Telemetry rate section ----------------------------------------
+        # Spinbox + "Set" button to send CMD SET_TELEM_RATE to the Arduino.
         layout.addWidget(QLabel("Telem Hz:"))
-        self._spin_rate = QSpinBox()
+
+        self._spin_rate: QSpinBox = QSpinBox()
         self._spin_rate.setRange(1, 50)
         self._spin_rate.setValue(10)
         self._spin_rate.setFixedWidth(60)
         self._spin_rate.setToolTip("Telemetry broadcast rate (1–50 Hz)")
         layout.addWidget(self._spin_rate)
 
-        self._btn_set_rate = QPushButton("Set")
+        self._btn_set_rate: QPushButton = QPushButton("Set")
         self._btn_set_rate.setFixedWidth(44)
-        self._btn_set_rate.setEnabled(False)
+        self._btn_set_rate.setEnabled(False)   # enabled only when connected
         self._btn_set_rate.setToolTip("Send CMD SET_TELEM_RATE to Arduino")
         self._btn_set_rate.clicked.connect(self._on_set_rate)
         layout.addWidget(self._btn_set_rate)
 
         layout.addSpacing(12)
 
-        # Auto-record
-        self._chk_auto = QCheckBox("Auto-record")
+        # --- Recording section ---------------------------------------------
+        # Auto-record checkbox automatically starts / stops on state transitions.
+        self._chk_auto: QCheckBox = QCheckBox("Auto-record")
         self._chk_auto.setChecked(True)
         self._chk_auto.setToolTip(
             "Automatically start/stop CSV recording when state enters/leaves RUNNING"
         )
         layout.addWidget(self._chk_auto)
 
-        # Manual record toggle
-        self._btn_record = QPushButton("Rec ●")
+        # Manual record toggle — turns red while active.
+        self._btn_record: QPushButton = QPushButton("Rec ●")
         self._btn_record.setCheckable(True)
         self._btn_record.setFixedWidth(70)
         self._btn_record.setToolTip("Manually start or stop CSV recording")
@@ -226,14 +259,13 @@ class TelemetryTab(QWidget):
 
         layout.addStretch()
 
-        # Export PNG
-        btn_png = QPushButton("Export PNG")
+        # --- Right-side utility buttons ------------------------------------
+        btn_png: QPushButton = QPushButton("Export PNG")
         btn_png.setToolTip("Save the current plot as a PNG image")
         btn_png.clicked.connect(self._on_export_png)
         layout.addWidget(btn_png)
 
-        # Clear
-        btn_clear = QPushButton("Clear")
+        btn_clear: QPushButton = QPushButton("Clear")
         btn_clear.setToolTip("Clear the plot (does not affect recording)")
         btn_clear.clicked.connect(self._plot.clear)
         layout.addWidget(btn_clear)
@@ -245,12 +277,27 @@ class TelemetryTab(QWidget):
     # ------------------------------------------------------------------
 
     def _update_readouts(self, frame: TelemetryFrame) -> None:
+        """Refresh every numeric readout label from the latest telemetry frame.
+
+        Velocity and acceleration values are sourced from the live plot rather
+        than the raw frame so that the displayed values match the smoothed curves
+        shown on the plot (EMA-filtered acceleration, ramped commanded velocity).
+
+        Args:
+            frame: The most recently received telemetry frame.
+        """
+        # Raw positional and state fields come directly from the frame.
         self._lbl_pos.setText(f"{frame.pos_mm:.2f}")
         self._lbl_vel_act.setText(f"{frame.vel_actual_mm_s:.2f}")
-        self._lbl_vel_cmd.setText(f"{self._plot.last_vel_cmd_ramped:.2f}")
-        self._lbl_accel.setText(f"{self._plot.last_accel_computed:.2f}")
         self._lbl_state.setText(frame.state)
         self._lbl_phase.setText(frame.phase.replace("_", " "))
+
+        # Velocity (commanded) and acceleration are taken from the plot's
+        # derived signals to stay consistent with what is drawn on screen.
+        self._lbl_vel_cmd.setText(f"{self._plot.last_vel_cmd_ramped:.2f}")
+        self._lbl_accel.setText(f"{self._plot.last_accel_computed:.2f}")
+
+        # Frame counter reflects how many frames the recorder has stored so far.
         self._lbl_frames.setText(str(self._recorder.frame_count))
 
     # ------------------------------------------------------------------
@@ -272,11 +319,23 @@ class TelemetryTab(QWidget):
             self._stop_recording()
 
     def _start_recording(self) -> None:
+        """Begin a new CSV recording session tagged with the current profile name.
+
+        Updates the Rec button to its checked (red) state so the operator can
+        see that recording is active.
+        """
         self._recorder.start(self._profile_name)
         self._btn_record.setChecked(True)
         log.info("Recording started for profile %r", self._profile_name)
 
     def _stop_recording(self) -> None:
+        """Finalise the active recording and flush the CSV to disk.
+
+        Resets the Rec button to its unchecked state.  A ``RuntimeError`` from
+        :meth:`~core.data_recorder.DataRecorder.finish` is silently ignored
+        because it only fires when no recording is active — a harmless race
+        condition between the auto-record logic and a manual stop.
+        """
         try:
             run = self._recorder.finish()
             self._btn_record.setChecked(False)
@@ -290,15 +349,28 @@ class TelemetryTab(QWidget):
     # ------------------------------------------------------------------
 
     def _on_set_rate(self) -> None:
+        """Send CMD SET_TELEM_RATE to the Arduino using the spinbox value.
+
+        Shows a warning dialog if the command is rejected (e.g. Arduino not ready).
+        """
         if self._ci is None:
             return
-        hz = self._spin_rate.value()
+        rate_hz: int = self._spin_rate.value()
         try:
-            self._ci.set_telem_rate(hz)
+            self._ci.set_telem_rate(rate_hz)
         except CommandError as exc:
             QMessageBox.warning(self, "Set rate failed", str(exc))
 
     def _on_record_toggled(self, checked: bool) -> None:
+        """Manually start or stop recording when the operator clicks the Rec button.
+
+        Delegates to :meth:`_start_recording` or :meth:`_stop_recording` as
+        appropriate, but only if the recorder is not already in the requested state
+        (prevents double-start or double-stop when auto-record also fires).
+
+        Args:
+            checked: ``True`` when the button transitions to its pressed (recording) state.
+        """
         if checked:
             if not self._recorder.is_recording:
                 self._start_recording()
@@ -307,6 +379,13 @@ class TelemetryTab(QWidget):
                 self._stop_recording()
 
     def _on_export_png(self) -> None:
+        """Save the current plot canvas to a user-chosen PNG file.
+
+        Opens a file-save dialog pre-filled with a default filename.  The plot
+        widget is captured using ``QWidget.grab()`` so the exported image matches
+        exactly what is shown on screen.  Logs a warning if the write fails.
+        """
+        # Ask the operator where to save the image.
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save plot as PNG",
@@ -314,7 +393,9 @@ class TelemetryTab(QWidget):
             "PNG Images (*.png)",
         )
         if not path:
-            return
+            return   # operator cancelled the dialog
+
+        # Capture and write the plot widget to disk.
         pixmap = self._plot.grab()
         if pixmap.save(path, "PNG"):
             log.info("Plot exported: %s", path)

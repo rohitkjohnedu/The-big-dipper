@@ -72,6 +72,15 @@ _LABEL_STYLE_BASE: Final[str] = (
 
 
 def _colored_label(text: str, bg: str) -> QLabel:
+    """Create a centred ``QLabel`` with a coloured background pill.
+
+    Args:
+        text: Initial label text.
+        bg:   CSS colour string for the background (e.g. ``"#2e7d32"``).
+
+    Returns:
+        A styled, centred ``QLabel`` ready to add to a layout.
+    """
     lbl: QLabel = QLabel(text)
     lbl.setStyleSheet(_LABEL_STYLE_BASE.format(bg=bg))
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -143,35 +152,38 @@ class StatusBar(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Lay out the four indicator labels separated by thin vertical lines."""
         layout: QHBoxLayout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
 
-        # Port indicator
+        # Port indicator — shows the port name with a coloured connection dot.
         self._lbl_port: QLabel = _colored_label(f"● {self._port}", _STATE_COLOR_DEFAULT)
         self._lbl_port.setToolTip("Serial port connection status")
 
-        # State label
-        self._lbl_state: QLabel = _colored_label("IDLE", _STATE_COLORS.get("IDLE", _STATE_COLOR_DEFAULT))
+        # State label — background colour changes with each Arduino state.
+        self._lbl_state: QLabel = _colored_label(
+            "IDLE", _STATE_COLORS.get("IDLE", _STATE_COLOR_DEFAULT)
+        )
         self._lbl_state.setMinimumWidth(90)
         self._lbl_state.setToolTip("Arduino machine state")
 
-        # Phase label
+        # Phase label — shows the current run sub-phase (e.g. DESCENDING).
         self._lbl_phase: QLabel = _colored_label("NONE", _STATE_COLOR_DEFAULT)
         self._lbl_phase.setMinimumWidth(110)
         self._lbl_phase.setToolTip("Current run phase")
 
-        # Elapsed time
+        # Elapsed time — counts wall-clock seconds spent in RUNNING state.
         self._lbl_elapsed: QLabel = _colored_label("00:00.0", _STATE_COLOR_DEFAULT)
         self._lbl_elapsed.setMinimumWidth(80)
         self._lbl_elapsed.setToolTip("Time spent in RUNNING state")
 
-        # Thin vertical separators between fields
         def _sep() -> QFrame:
-            f: QFrame = QFrame()
-            f.setFrameShape(QFrame.Shape.VLine)
-            f.setStyleSheet("QFrame { color: #555555; }")
-            return f
+            """Return a thin vertical QFrame line used as a visual separator."""
+            separator: QFrame = QFrame()
+            separator.setFrameShape(QFrame.Shape.VLine)
+            separator.setStyleSheet("QFrame { color: #555555; }")
+            return separator
 
         layout.addWidget(self._lbl_port)
         layout.addWidget(_sep())
@@ -187,29 +199,47 @@ class StatusBar(QWidget):
     # ------------------------------------------------------------------
 
     def _update_state(self, state: str) -> None:
-        self._lbl_state.setText(state)
-        bg = _STATE_COLORS.get(state, _STATE_COLOR_DEFAULT)
-        self._lbl_state.setStyleSheet(_LABEL_STYLE_BASE.format(bg=bg))
+        """Update the state label text and colour; advance the elapsed-time state machine.
 
-        # Elapsed-time state machine:
-        #   IDLE / READY / HOMING / ERROR → reset counter
-        #   RUNNING → start/resume counting
-        #   PAUSED  → freeze counter (don't reset)
+        The elapsed-time counter follows these rules:
+
+        * **RUNNING** — start counting (or resume if previously paused).
+        * **PAUSED** — freeze the counter without resetting it so the total
+          accumulated time is preserved when the run resumes.
+        * **Any other state** (IDLE, READY, HOMING, ERROR) — reset the counter
+          to zero because a new run has not yet started or has ended.
+
+        Args:
+            state: The latest Arduino state string (e.g. ``"RUNNING"``).
+        """
+        # Update the label text and its background colour.
+        self._lbl_state.setText(state)
+        background_color: str = _STATE_COLORS.get(state, _STATE_COLOR_DEFAULT)
+        self._lbl_state.setStyleSheet(_LABEL_STYLE_BASE.format(bg=background_color))
+
+        # Advance the elapsed-time state machine.
         if state == "RUNNING":
             if not self._running:
+                # Transition into RUNNING — start the stopwatch.
                 self._running   = True
                 self._run_start = time.monotonic()
         elif state == "PAUSED":
             if self._running:
+                # Transition into PAUSED — bank elapsed time and freeze the clock.
                 self._elapsed_s += time.monotonic() - self._run_start
                 self._running    = False
         else:
-            # IDLE / READY / HOMING / ERROR — full reset
+            # Any non-RUNNING / non-PAUSED state — reset the elapsed counter.
             self._running   = False
             self._elapsed_s = 0.0
             self._lbl_elapsed.setText("00:00.0")
 
     def _update_phase(self, phase: str) -> None:
+        """Update the phase label, replacing underscores with spaces for readability.
+
+        Args:
+            phase: The latest Arduino phase string (e.g. ``"DWELL_BOTTOM"``).
+        """
         self._lbl_phase.setText(phase.replace("_", " "))
 
     def _tick_elapsed(self) -> None:

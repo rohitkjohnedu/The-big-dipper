@@ -216,6 +216,7 @@ class ProfileManagerTab(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Assemble the tab layout: top toolbar, profile table, and bottom action toolbar."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
@@ -225,8 +226,9 @@ class ProfileManagerTab(QWidget):
         layout.addWidget(self._build_bottom_toolbar())
 
     def _build_top_toolbar(self) -> QWidget:
-        bar    = QWidget()
-        row    = QHBoxLayout(bar)
+        """Build the top toolbar containing the Refresh button and the directory path label."""
+        bar: QWidget     = QWidget()
+        row: QHBoxLayout = QHBoxLayout(bar)
         row.setContentsMargins(0, 0, 0, 0)
 
         self._btn_refresh = QPushButton("Refresh")
@@ -243,6 +245,13 @@ class ProfileManagerTab(QWidget):
         return bar
 
     def _build_table(self) -> QTableWidget:
+        """Configure and return the profile table widget.
+
+        Sets up column headers, selection behaviour (single row, no inline
+        editing), alternating row colours, and a stretch on the Name column so
+        it fills available horizontal space.  Double-clicking a row triggers
+        :meth:`_on_load`.
+        """
         self._table = QTableWidget(0, _NUM_COLS)
         self._table.setHorizontalHeaderLabels(_HEADERS)
         self._table.setSelectionBehavior(
@@ -263,8 +272,13 @@ class ProfileManagerTab(QWidget):
         return self._table
 
     def _build_bottom_toolbar(self) -> QWidget:
-        bar    = QWidget()
-        row    = QHBoxLayout(bar)
+        """Build the bottom action toolbar with New, Edit, Duplicate, Rename, Delete, and Load buttons.
+
+        Edit, Duplicate, Rename, Delete, and Load are disabled at startup and
+        enabled only while a table row is selected (see :meth:`_on_selection_changed`).
+        """
+        bar: QWidget     = QWidget()
+        row: QHBoxLayout = QHBoxLayout(bar)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
 
@@ -314,6 +328,7 @@ class ProfileManagerTab(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_table(self) -> None:
+        """Clear the table and rebuild it from the current :attr:`_profiles` list."""
         self._table.setRowCount(0)
         for row_idx, p in enumerate(self._profiles):
             self._table.insertRow(row_idx)
@@ -341,6 +356,7 @@ class ProfileManagerTab(QWidget):
         return self._table.row(rows[0])
 
     def _selected_profile(self) -> Optional[DipProfile]:
+        """Return the :class:`~core.profile.DipProfile` for the selected table row, or ``None``."""
         row = self._selected_row()
         if row < 0 or row >= len(self._profiles):
             return None
@@ -356,23 +372,33 @@ class ProfileManagerTab(QWidget):
     # ------------------------------------------------------------------
 
     def _on_selection_changed(self) -> None:
-        has_sel = self._selected_row() >= 0
-        self._btn_edit.setEnabled(has_sel)
-        self._btn_duplicate.setEnabled(has_sel)
-        self._btn_rename.setEnabled(has_sel)
-        self._btn_delete.setEnabled(has_sel)
-        self._btn_load.setEnabled(has_sel)
+        """Enable or disable the row-action buttons when the table selection changes."""
+        has_selection: bool = self._selected_row() >= 0
+        self._btn_edit.setEnabled(has_selection)
+        self._btn_duplicate.setEnabled(has_selection)
+        self._btn_rename.setEnabled(has_selection)
+        self._btn_delete.setEnabled(has_selection)
+        self._btn_load.setEnabled(has_selection)
 
     def _on_new(self) -> None:
+        """Open the New Profile dialog; save the result to the profiles directory on accept.
+
+        Asks for confirmation before overwriting an existing file with the same name.
+        Shows an error dialog if the file cannot be written.
+        """
         dlg = _NewProfileDialog(self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
+
         try:
             profile = dlg.get_profile()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid profile", str(exc))
             return
+
         path = self._profile_path(profile)
+
+        # Ask before overwriting an existing file.
         if path.exists():
             reply = QMessageBox.question(
                 self, "File exists",
@@ -381,79 +407,116 @@ class ProfileManagerTab(QWidget):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
+
         try:
             save_profile(profile, path)
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
+
         self.refresh()
         log.info("new profile saved: %s", path)
 
     def _on_edit(self) -> None:
+        """Open the Edit dialog for the selected profile and save the updated version.
+
+        If the operator changes the profile name, the old file is deleted after
+        the new one is written successfully.  Refuses to overwrite an unrelated
+        existing file with the new name.
+        """
         profile = self._selected_profile()
         if profile is None:
             return
-        old_path = self._profile_path(profile)
+
+        old_path: Path = self._profile_path(profile)
         dlg = _NewProfileDialog(self, profile=profile)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
+
         try:
             updated = dlg.get_profile()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid profile", str(exc))
             return
-        new_path = self._profile_path(updated)
+
+        new_path: Path = self._profile_path(updated)
+
+        # Prevent silently overwriting a different existing profile.
         if new_path != old_path and new_path.exists():
-            QMessageBox.warning(self, "Name in use",
-                                f"{new_path.name} already exists. Choose a different name.")
+            QMessageBox.warning(
+                self, "Name in use",
+                f"{new_path.name} already exists. Choose a different name.",
+            )
             return
+
         try:
             save_profile(updated, new_path)
+            # Remove the old file if the name changed.
             if new_path != old_path and old_path.exists():
                 old_path.unlink()
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
+
         self.refresh()
         log.info("profile edited: %s", new_path)
 
     def _on_duplicate(self) -> None:
+        """Copy the selected profile under a new name chosen via an input dialog.
+
+        The duplicate gets a fresh ``created_at`` timestamp because ``created_at=""``
+        triggers :meth:`~core.profile.DipProfile.__post_init__` to stamp the current time.
+        """
         profile = self._selected_profile()
         if profile is None:
             return
+
         new_name, ok = _ask_name(self, "Duplicate profile", f"{profile.name}_copy")
         if not ok or not new_name:
             return
+
         import dataclasses
+        # Clear created_at so __post_init__ stamps a fresh timestamp.
         new_profile = dataclasses.replace(profile, name=new_name, created_at="")
-        # clear created_at so __post_init__ stamps fresh time
-        path = self._profile_path(new_profile)
+        path: Path  = self._profile_path(new_profile)
+
         if path.exists():
-            QMessageBox.warning(self, "Name in use",
-                                f"{path.name} already exists.  Choose a different name.")
+            QMessageBox.warning(
+                self, "Name in use",
+                f"{path.name} already exists.  Choose a different name.",
+            )
             return
+
         try:
             save_profile(new_profile, path)
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
             return
+
         self.refresh()
 
     def _on_rename(self) -> None:
+        """Rename the selected profile: save under the new name, delete the old file."""
         profile = self._selected_profile()
         if profile is None:
             return
-        old_path = self._profile_path(profile)
+
+        old_path: Path = self._profile_path(profile)
         new_name, ok = _ask_name(self, "Rename profile", profile.name)
         if not ok or not new_name or new_name == profile.name:
             return
+
         import dataclasses
-        renamed = dataclasses.replace(profile, name=new_name)
-        new_path = self._profile_path(renamed)
+        renamed   = dataclasses.replace(profile, name=new_name)
+        new_path: Path = self._profile_path(renamed)
+
         if new_path.exists():
-            QMessageBox.warning(self, "Name in use",
-                                f"{new_path.name} already exists.  Choose a different name.")
+            QMessageBox.warning(
+                self, "Name in use",
+                f"{new_path.name} already exists.  Choose a different name.",
+            )
             return
+
         try:
             save_profile(renamed, new_path)
             if old_path.exists():
@@ -461,13 +524,16 @@ class ProfileManagerTab(QWidget):
         except OSError as exc:
             QMessageBox.critical(self, "Rename failed", str(exc))
             return
+
         self.refresh()
 
     def _on_delete(self) -> None:
+        """Delete the selected profile file after asking the operator for confirmation."""
         profile = self._selected_profile()
         if profile is None:
             return
-        path = self._profile_path(profile)
+
+        path: Path = self._profile_path(profile)
         reply = QMessageBox.question(
             self, "Delete profile",
             f"Delete '{profile.name}'?\n{path}\n\nThis cannot be undone.",
@@ -475,16 +541,19 @@ class ProfileManagerTab(QWidget):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+
         try:
             if path.exists():
                 path.unlink()
         except OSError as exc:
             QMessageBox.critical(self, "Delete failed", str(exc))
             return
+
         self.refresh()
         log.info("profile deleted: %s", path)
 
     def _on_load(self) -> None:
+        """Emit :attr:`profile_selected` with the selected profile so MainWindow can act on it."""
         profile = self._selected_profile()
         if profile is None:
             return
@@ -497,6 +566,7 @@ class ProfileManagerTab(QWidget):
 # ---------------------------------------------------------------------------
 
 def _cell(text: str) -> QTableWidgetItem:
+    """Create a centre-aligned, non-editable ``QTableWidgetItem`` with the given text."""
     item = QTableWidgetItem(text)
     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
     return item

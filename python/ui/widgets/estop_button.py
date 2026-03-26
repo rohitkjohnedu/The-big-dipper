@@ -82,6 +82,11 @@ class EstopButton(QPushButton):
         self._ci = ci
 
     def _apply_style(self) -> None:
+        """Apply the red stylesheet and configure size policy, cursor, and tooltip.
+
+        Called once during construction.  The button expands horizontally to fill
+        available width so it remains prominent in any layout.
+        """
         self.setStyleSheet(_STYLE)
         self.setMinimumWidth(_MIN_WIDTH_PX)
         self.setMinimumHeight(_MIN_HEIGHT_PX)
@@ -93,6 +98,12 @@ class EstopButton(QPushButton):
         )
 
     def _on_clicked(self) -> None:
+        """Invoke ``ci.estop()`` on every click; warn if no command interface is set.
+
+        Silently ignoring the click when ``_ci`` is ``None`` (disconnected) is
+        intentional — the button stays visible and pressable at all times, but
+        there is nothing to send the command to.
+        """
         if self._ci is None:
             log.warning("EstopButton clicked but no command interface set — ignored")
             return
