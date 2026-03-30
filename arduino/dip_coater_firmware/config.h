@@ -44,7 +44,7 @@
 // Limit-switch backoff
 // =============================================================================
 
-#define LIMIT_BACKOFF_MM          5.0f      ///< Distance to back away from an endstop after an unexpected trigger (mm)
+#define LIMIT_BACKOFF_MM         15.0f      ///< Distance to back away from an endstop after an unexpected trigger (mm)
 #define LIMIT_BACKOFF_SPEED_MM_S 10.0f      ///< Speed used during the backoff move (mm/s)
 
 // =============================================================================

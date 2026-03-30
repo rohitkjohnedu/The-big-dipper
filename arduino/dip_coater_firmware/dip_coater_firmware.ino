@@ -47,13 +47,17 @@ CommandParser    commandParser(sm, mc, diag);
 // -----------------------------------------------------------------------------
 
 void onBottomEndstop() {
-    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // reject crosstalk / noise glitch
+    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // reject short noise spike
+    delayMicroseconds(200);                               // confirm pin stays LOW for 200 µs
+    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // was noise — discard
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(false);
 }
 
 void onTopEndstop() {
-    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // reject crosstalk / noise glitch
+    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // reject short noise spike
+    delayMicroseconds(200);                               // confirm pin stays LOW for 200 µs
+    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // was noise — discard
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(true);
 }
