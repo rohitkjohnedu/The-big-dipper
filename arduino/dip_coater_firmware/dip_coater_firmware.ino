@@ -47,11 +47,13 @@ CommandParser    commandParser(sm, mc, diag);
 // -----------------------------------------------------------------------------
 
 void onBottomEndstop() {
+    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // reject crosstalk / noise glitch
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(false);
 }
 
 void onTopEndstop() {
+    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // reject crosstalk / noise glitch
     if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
     mc.onEndstopTriggered(true);
 }
