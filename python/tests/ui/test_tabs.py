@@ -283,6 +283,56 @@ class TestControlTab:
         tab._on_jog_down_pressed()
         ci.jog_start.assert_called_once_with("DOWN", 2.0, 20.0)
 
+    def test_step_buttons_enabled_only_in_ready(self, qtbot):
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        tab.set_command_interface(_make_ci())
+        for state in ("IDLE", "HOMING", "RUNNING", "PAUSED", "ERROR"):
+            tab.update_state(state)
+            assert all(not b.isEnabled() for b in tab._step_btns), (
+                f"step buttons should be disabled in {state}"
+            )
+            assert not tab._btn_custom_move.isEnabled(), (
+                f"custom move button should be disabled in {state}"
+            )
+        tab.update_state("READY")
+        assert all(b.isEnabled() for b in tab._step_btns)
+        assert tab._btn_custom_move.isEnabled()
+
+    def test_step_move_up_calls_move_by_mm(self, qtbot):
+        ci = _make_ci()
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        tab.set_command_interface(ci)
+        tab.update_state("READY")
+        tab._spin_jog_spd.setValue(4.0)
+        tab._spin_jog_accel.setValue(30.0)
+        tab._on_step_move(10.0)
+        ci.move_by_mm.assert_called_once_with(10.0, 4.0, 30.0)
+
+    def test_step_move_down_calls_move_by_mm(self, qtbot):
+        ci = _make_ci()
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        tab.set_command_interface(ci)
+        tab.update_state("READY")
+        tab._spin_jog_spd.setValue(2.0)
+        tab._spin_jog_accel.setValue(20.0)
+        tab._on_step_move(-5.0)
+        ci.move_by_mm.assert_called_once_with(-5.0, 2.0, 20.0)
+
+    def test_custom_move_calls_move_by_mm(self, qtbot):
+        ci = _make_ci()
+        tab = ControlTab()
+        qtbot.addWidget(tab)
+        tab.set_command_interface(ci)
+        tab.update_state("READY")
+        tab._spin_move_dist.setValue(25.0)
+        tab._spin_move_spd.setValue(8.0)
+        tab._spin_move_accel.setValue(40.0)
+        tab._on_custom_move()
+        ci.move_by_mm.assert_called_once_with(25.0, 8.0, 40.0)
+
     def test_stop_button_stops_jog(self, qtbot):
         ci = _make_ci()
         tab = ControlTab()
@@ -657,7 +707,12 @@ class TestTelemetryTab:
     def test_update_frame_updates_vel_labels(self, qtbot, tmp_path):
         tab = TelemetryTab(log_dir=tmp_path)
         qtbot.addWidget(tab)
-        tab.update_frame(_make_frame(vel_act=3.5, vel_cmd=4.0))
+        # _lbl_vel_cmd shows last_vel_cmd_ramped from the live plot, not the
+        # raw frame value.  On the first frame dt=0 so the ramp cannot advance
+        # from 0.  A second frame 200 ms later lets the ramp (min 20 mm/s²)
+        # travel the full 4.0 mm/s in one step.
+        tab.update_frame(_make_frame(vel_act=3.5, vel_cmd=4.0, ts=1000))
+        tab.update_frame(_make_frame(vel_act=3.5, vel_cmd=4.0, ts=1200))
         assert "3.50" in tab._lbl_vel_act.text()
         assert "4.00" in tab._lbl_vel_cmd.text()
 

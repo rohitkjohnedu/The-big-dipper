@@ -398,6 +398,32 @@ class CommandInterface:
         self._mgr.send_command("CMD STOP")
         log.debug("jog_stop sent")
 
+    def move_by_mm(
+        self,
+        distance_mm: float,
+        speed_mm_s:  float,
+        accel_mm_s2: float,
+    ) -> None:
+        """Send ``CMD MOVE`` and wait for ``ACK MOVE``.
+
+        The Arduino transitions to RUNNING immediately and returns ``ACK MOVE``.
+        The move completes asynchronously; the UI learns of completion via
+        the next READY telemetry frame.
+
+        Args:
+            distance_mm: Signed displacement — positive = up, negative = down.
+            speed_mm_s:  Travel speed (mm/s).
+            accel_mm_s2: Acceleration (mm/s²).
+
+        Raises:
+            CommandError: On ERR response or ACK timeout.
+        """
+        cmd: str = (
+            f"CMD MOVE {distance_mm:.4f} {speed_mm_s:.4f} {accel_mm_s2:.4f}"
+        )
+        self._mgr.send_command(cmd)
+        self._wait_ack("MOVE")
+
     def run(self, profile: DipProfile) -> None:
         """
         Execute a dip-coating run, choosing the correct command sequence

@@ -34,7 +34,7 @@ from typing import Final, Optional
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
+    QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
@@ -195,12 +195,105 @@ class ControlTab(QWidget):
         return grp
 
     def _build_manual_group(self) -> QGroupBox:
-        """Build the jog pad and jog-parameter spinboxes inside a group box."""
+        """Build the jog pad, step-move buttons, and custom move panel side by side."""
         grp = QGroupBox("Manual Control")
-        outer = QVBoxLayout(grp)
-        outer.setSpacing(8)
-        outer.addWidget(self._build_jog_pad())
-        outer.addLayout(self._build_jog_params())
+        row = QHBoxLayout(grp)
+        row.setSpacing(16)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Left: existing jog pad + speed/accel params below it.
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        left.addWidget(self._build_jog_pad())
+        left.addLayout(self._build_jog_params())
+        left.addStretch()
+
+        row.addLayout(left)
+        row.addWidget(self._build_step_move_panel())
+        row.addWidget(self._build_custom_move_panel())
+        row.addStretch()
+        return grp
+
+    def _build_step_move_panel(self) -> QGroupBox:
+        """Build the fixed-distance step-move button column (+10/+5/+1/-1/-5/-10 mm).
+
+        Each button sends CMD MOVE using the jog speed and acceleration spinboxes.
+        All six buttons are stored in ``self._step_btns`` for enable/disable.
+        """
+        grp = QGroupBox("Step Move")
+        col = QVBoxLayout(grp)
+        col.setSpacing(4)
+
+        self._step_btns: list[QPushButton] = []
+        steps: list[tuple[float, str]] = [
+            ( 10.0, "+10 mm"),
+            (  5.0,  "+5 mm"),
+            (  1.0,  "+1 mm"),
+            ( -1.0,  "-1 mm"),
+            ( -5.0,  "-5 mm"),
+            (-10.0, "-10 mm"),
+        ]
+        for dist, label in steps:
+            btn = QPushButton(label)
+            btn.setFixedWidth(90)
+            btn.setToolTip(
+                f"Move {label} using jog speed and acceleration  (READY only)"
+            )
+            btn.clicked.connect(
+                lambda checked, d=dist: self._on_step_move(d)
+            )
+            self._step_btns.append(btn)
+            col.addWidget(btn)
+
+        col.addStretch()
+        return grp
+
+    def _build_custom_move_panel(self) -> QGroupBox:
+        """Build the custom move panel with settable distance, speed, and acceleration.
+
+        Sends CMD MOVE with the values from the three spinboxes when the Move
+        button is clicked.  Only enabled in READY state.
+        """
+        grp = QGroupBox("Custom Move")
+        form = QFormLayout(grp)
+        form.setSpacing(6)
+
+        self._spin_move_dist = QDoubleSpinBox()
+        self._spin_move_dist.setRange(-900.0, 900.0)
+        self._spin_move_dist.setValue(10.0)
+        self._spin_move_dist.setSuffix(" mm")
+        self._spin_move_dist.setDecimals(1)
+        self._spin_move_dist.setFixedWidth(110)
+        self._spin_move_dist.setToolTip(
+            "Move distance — positive = up, negative = down"
+        )
+
+        self._spin_move_spd = QDoubleSpinBox()
+        self._spin_move_spd.setRange(0.1, 50.0)
+        self._spin_move_spd.setValue(5.0)
+        self._spin_move_spd.setSuffix(" mm/s")
+        self._spin_move_spd.setDecimals(1)
+        self._spin_move_spd.setFixedWidth(110)
+        self._spin_move_spd.setToolTip("Travel speed for this move")
+
+        self._spin_move_accel = QDoubleSpinBox()
+        self._spin_move_accel.setRange(1.0, 500.0)
+        self._spin_move_accel.setValue(20.0)
+        self._spin_move_accel.setSuffix(" mm/s²")
+        self._spin_move_accel.setDecimals(1)
+        self._spin_move_accel.setFixedWidth(110)
+        self._spin_move_accel.setToolTip("Acceleration ramp for this move")
+
+        self._btn_custom_move = QPushButton("Move")
+        self._btn_custom_move.setToolTip(
+            "Execute a move with the distance, speed, and acceleration above  (READY only)"
+        )
+        self._btn_custom_move.clicked.connect(self._on_custom_move)
+
+        form.addRow("Distance:", self._spin_move_dist)
+        form.addRow("Speed:",    self._spin_move_spd)
+        form.addRow("Accel:",    self._spin_move_accel)
+        form.addRow(self._btn_custom_move)
         return grp
 
     def _build_jog_pad(self) -> QWidget:
@@ -407,10 +500,13 @@ class ControlTab(QWidget):
             connected and arduino_state in ("RUNNING", "PAUSED", "READY")
         )
 
-        # Jogging is only safe when the axis is stationary and homed.
+        # Jogging and fixed-distance moves are only safe when homed and stationary.
         jog_ok: bool = connected and arduino_state == "READY"
         self._btn_jog_up.setEnabled(jog_ok)
         self._btn_jog_down.setEnabled(jog_ok)
+        for btn in self._step_btns:
+            btn.setEnabled(jog_ok)
+        self._btn_custom_move.setEnabled(jog_ok)
 
         # Profile execution buttons.
         has_profiles: bool = len(self._profiles) > 0
@@ -487,6 +583,36 @@ class ControlTab(QWidget):
             )
         except (CommandError, ValueError) as exc:
             log.warning("Jog DOWN failed: %s", exc)
+
+    def _on_step_move(self, distance_mm: float) -> None:
+        """Send CMD MOVE for a fixed step distance using the jog speed and acceleration.
+
+        Args:
+            distance_mm: Signed displacement — positive = up, negative = down.
+        """
+        if self._ci is None:
+            return
+        try:
+            self._ci.move_by_mm(
+                distance_mm,
+                self._spin_jog_spd.value(),
+                self._spin_jog_accel.value(),
+            )
+        except CommandError as exc:
+            self._show_error("Move failed", str(exc))
+
+    def _on_custom_move(self) -> None:
+        """Send CMD MOVE using the distance, speed, and acceleration from the custom move panel."""
+        if self._ci is None:
+            return
+        try:
+            self._ci.move_by_mm(
+                self._spin_move_dist.value(),
+                self._spin_move_spd.value(),
+                self._spin_move_accel.value(),
+            )
+        except CommandError as exc:
+            self._show_error("Move failed", str(exc))
 
     def _on_run(self) -> None:
         """Spawn a _RunWorker thread to execute the selected profile without blocking the UI.
