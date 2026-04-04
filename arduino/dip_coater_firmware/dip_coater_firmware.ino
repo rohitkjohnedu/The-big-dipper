@@ -3,6 +3,7 @@
 //
 // Board  : uStepper S32  (Tools > Board > uStepper STM32 Boards)
 // Library: uStepperS32   (Library Manager)
+//          Pushbutton    (Pololu — add via Sketch > Include Library > Add .ZIP)
 // Baud   : 115200
 //
 // Module overview
@@ -20,6 +21,13 @@
 //   Home (top endstop) = 0 mm
 //   Positive mm        = upward   (toward home)
 //   Negative mm        = downward (into solution)
+//
+// Endstop debouncing
+// ------------------
+//   Both endstops are polled in loop() using the Pololu Pushbutton library.
+//   getSingleDebouncedPress() runs a 15 ms state-machine debounce — it returns
+//   true exactly once per confirmed trigger, filtering EMI and crosstalk spikes
+//   without any delayMicroseconds() hacks in ISRs.  Interrupts are not used.
 // =============================================================================
 
 #include "config.h"
@@ -28,6 +36,7 @@
 #include "diagnostics.h"
 #include "command_parser.h"
 #include "telemetry.h"
+#include <Pushbutton.h>
 
 // -----------------------------------------------------------------------------
 // Global objects
@@ -39,28 +48,12 @@ Diagnostics      diag;
 Telemetry        telem(mc, sm);
 CommandParser    commandParser(sm, mc, diag);
 
-// -----------------------------------------------------------------------------
-// Endstop ISR wrappers
-//
-// While ENDSTOP_TEST mode is active, manual endstop triggers are absorbed here
-// so they do not activate the limit-backoff logic in MotionController.
-// -----------------------------------------------------------------------------
-
-void onBottomEndstop() {
-    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // reject short noise spike
-    delayMicroseconds(200);                               // confirm pin stays LOW for 200 µs
-    if (digitalRead(PIN_ENDSTOP_BOTTOM) != LOW) return;  // was noise — discard
-    if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
-    mc.onEndstopTriggered(false);
-}
-
-void onTopEndstop() {
-    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // reject short noise spike
-    delayMicroseconds(200);                               // confirm pin stays LOW for 200 µs
-    if (digitalRead(PIN_ENDSTOP_TOP) != LOW) return;     // was noise — discard
-    if (diag.mode() == Diagnostics::Mode::ENDSTOP_TEST) return;
-    mc.onEndstopTriggered(true);
-}
+// Endstop inputs — active LOW with internal pull-up.
+//   PULL_UP_ENABLED  : Pushbutton calls pinMode(pin, INPUT_PULLUP) on first use.
+//   DEFAULT_STATE_HIGH: released state reads HIGH; triggered state reads LOW.
+//   getSingleDebouncedPress() returns true once per debounced LOW transition.
+Pushbutton endstopBottom(PIN_ENDSTOP_BOTTOM, PULL_UP_ENABLED, DEFAULT_STATE_HIGH);
+Pushbutton endstopTop   (PIN_ENDSTOP_TOP,    PULL_UP_ENABLED, DEFAULT_STATE_HIGH);
 
 // =============================================================================
 // setup()
@@ -70,10 +63,10 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     while (!Serial) { delay(10); }
 
-    pinMode(PIN_ENDSTOP_BOTTOM, INPUT_PULLUP);
-    pinMode(PIN_ENDSTOP_TOP,    INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(PIN_ENDSTOP_BOTTOM), onBottomEndstop, FALLING);
-    attachInterrupt(digitalPinToInterrupt(PIN_ENDSTOP_TOP),    onTopEndstop,    FALLING);
+    // No explicit pinMode or attachInterrupt needed for the endstops.
+    // Pushbutton configures INPUT_PULLUP lazily on the first isPressed() call
+    // (inside the loop() polling below), and the library's state-machine
+    // debounce replaces the interrupt-based approach entirely.
 
     mc.begin();
     diag.begin(mc, sm);
@@ -94,4 +87,24 @@ void loop() {
     mc.update();              // service active motion mode
     diag.update();            // service active diagnostic test
     telem.update();           // broadcast telemetry at configured rate
+
+    // -------------------------------------------------------------------------
+    // Endstop polling — Pushbutton 15 ms debounce
+    //
+    // getSingleDebouncedPress() advances an internal state machine on every
+    // call and returns true exactly once after a pin has been continuously LOW
+    // for 15 ms.  This rejects brief EMI spikes and capacitive crosstalk between
+    // adjacent signal lines without blocking loop().
+    //
+    // In ENDSTOP_TEST mode diag.update() already monitors both pins directly;
+    // the triggers are absorbed here so they do not reach MotionController.
+    // -------------------------------------------------------------------------
+    if (endstopBottom.getSingleDebouncedPress()) {
+        if (diag.mode() != Diagnostics::Mode::ENDSTOP_TEST)
+            mc.onEndstopTriggered(false);
+    }
+    if (endstopTop.getSingleDebouncedPress()) {
+        if (diag.mode() != Diagnostics::Mode::ENDSTOP_TEST)
+            mc.onEndstopTriggered(true);
+    }
 }
