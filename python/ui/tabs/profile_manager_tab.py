@@ -61,17 +61,21 @@ from core.profile import DipProfile, list_profiles, load_profile, save_profile
 log: Final[logging.Logger] = logging.getLogger(__name__)
 
 # Column indices
-_COL_NAME    = 0
-_COL_DIP     = 1
-_COL_WDRAW   = 2
-_COL_ACCEL   = 3
-_COL_DEPTH   = 4
-_COL_DIPS    = 5
-_COL_CREATED = 6
-_NUM_COLS    = 7
+_COL_NAME      = 0
+_COL_DIP       = 1
+_COL_WDRAW     = 2
+_COL_ACCEL     = 3
+_COL_DEPTH     = 4
+_COL_DIPS      = 5
+_COL_DWELL_BOT = 6
+_COL_DWELL_TOP = 7
+_COL_NOTES     = 8
+_COL_CREATED   = 9
+_NUM_COLS      = 10
 
 _HEADERS = ("Name", "Dip (mm/s)", "Wdraw (mm/s)", "Accel (mm/s²)",
-            "Depth (mm)", "Dips", "Created")
+            "Depth (mm)", "Dips", "Dwell Bot (ms)", "Dwell Top (ms)",
+            "Notes", "Created")
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +104,8 @@ class _NewProfileDialog(QDialog):
 
         self._name:      QLineEdit      = QLineEdit()
         self._name.setPlaceholderText("e.g. silica_coat_v1")
-        self._dip_spd:   QDoubleSpinBox = QDoubleSpinBox(); self._dip_spd.setRange(0.1, 100.0); self._dip_spd.setValue(5.0);   self._dip_spd.setSuffix(" mm/s")
-        self._wdraw_spd: QDoubleSpinBox = QDoubleSpinBox(); self._wdraw_spd.setRange(0.1, 100.0); self._wdraw_spd.setValue(5.0); self._wdraw_spd.setSuffix(" mm/s")
+        self._dip_spd:   QDoubleSpinBox = QDoubleSpinBox(); self._dip_spd.setRange(0.1, 40.0); self._dip_spd.setValue(5.0);   self._dip_spd.setSuffix(" mm/s")
+        self._wdraw_spd: QDoubleSpinBox = QDoubleSpinBox(); self._wdraw_spd.setRange(0.1, 40.0); self._wdraw_spd.setValue(5.0); self._wdraw_spd.setSuffix(" mm/s")
         self._accel:     QDoubleSpinBox = QDoubleSpinBox(); self._accel.setRange(1.0, 500.0); self._accel.setValue(20.0);      self._accel.setSuffix(" mm/s²")
         self._depth:     QDoubleSpinBox = QDoubleSpinBox(); self._depth.setRange(0.1, 880.0); self._depth.setValue(20.0);      self._depth.setSuffix(" mm")
         self._dwell_bot: QSpinBox       = QSpinBox();       self._dwell_bot.setRange(0, 60_000); self._dwell_bot.setValue(500);  self._dwell_bot.setSuffix(" ms")
@@ -266,8 +270,19 @@ class ProfileManagerTab(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(_COL_NAME,    QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(_COL_CREATED, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        # Initial column widths — user can drag to adjust any of them.
+        self._table.setColumnWidth(_COL_NAME,      160)
+        self._table.setColumnWidth(_COL_DIP,        80)
+        self._table.setColumnWidth(_COL_WDRAW,      90)
+        self._table.setColumnWidth(_COL_ACCEL,      90)
+        self._table.setColumnWidth(_COL_DEPTH,      80)
+        self._table.setColumnWidth(_COL_DIPS,       45)
+        self._table.setColumnWidth(_COL_DWELL_BOT,  100)
+        self._table.setColumnWidth(_COL_DWELL_TOP,  100)
+        self._table.setColumnWidth(_COL_NOTES,      160)
+        self._table.setColumnWidth(_COL_CREATED,     90)
         self._table.itemDoubleClicked.connect(self._on_load)
         return self._table
 
@@ -332,15 +347,20 @@ class ProfileManagerTab(QWidget):
         self._table.setRowCount(0)
         for row_idx, p in enumerate(self._profiles):
             self._table.insertRow(row_idx)
-            self._table.setItem(row_idx, _COL_NAME,    _cell(p.name))
-            self._table.setItem(row_idx, _COL_DIP,     _cell(f"{p.dip_speed_mm_s:.1f}"))
-            self._table.setItem(row_idx, _COL_WDRAW,   _cell(f"{p.withdraw_speed_mm_s:.1f}"))
-            self._table.setItem(row_idx, _COL_ACCEL,   _cell(f"{p.accel_mm_s2:.1f}"))
-            self._table.setItem(row_idx, _COL_DEPTH,   _cell(f"{p.dip_depth_mm:.1f}"))
-            self._table.setItem(row_idx, _COL_DIPS,    _cell(str(p.n_dips)))
+            self._table.setItem(row_idx, _COL_NAME,      _cell(p.name))
+            self._table.setItem(row_idx, _COL_DIP,       _cell(f"{p.dip_speed_mm_s:.1f}"))
+            self._table.setItem(row_idx, _COL_WDRAW,     _cell(f"{p.withdraw_speed_mm_s:.1f}"))
+            self._table.setItem(row_idx, _COL_ACCEL,     _cell(f"{p.accel_mm_s2:.1f}"))
+            self._table.setItem(row_idx, _COL_DEPTH,     _cell(f"{p.dip_depth_mm:.1f}"))
+            self._table.setItem(row_idx, _COL_DIPS,      _cell(str(p.n_dips)))
+            self._table.setItem(row_idx, _COL_DWELL_BOT, _cell(str(p.dwell_bottom_ms)))
+            self._table.setItem(row_idx, _COL_DWELL_TOP, _cell(str(p.dwell_top_ms)))
+            # Left-align notes so they read naturally.
+            notes_item = QTableWidgetItem(p.notes or "")
+            self._table.setItem(row_idx, _COL_NOTES,     notes_item)
             # Show only the date portion of the ISO timestamp for readability.
             created = p.created_at[:10] if p.created_at else "—"
-            self._table.setItem(row_idx, _COL_CREATED, _cell(created))
+            self._table.setItem(row_idx, _COL_CREATED,   _cell(created))
         self._on_selection_changed()
         self._lbl_dir.setText(str(self._profile_dir))
 

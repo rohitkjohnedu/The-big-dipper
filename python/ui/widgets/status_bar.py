@@ -126,6 +126,9 @@ class StatusBar(QWidget):
         """
         self._update_state(frame.state)
         self._update_phase(frame.phase)
+        self._lbl_pos.setText(f"{frame.pos_mm:+.2f} mm")
+        self._lbl_vel.setText(f"{frame.vel_actual_mm_s:.2f} mm/s")
+        self._lbl_accel.setText(f"{frame.accel_mm_s2:.1f} mm/s²")
 
     def set_connected(self, connected: bool, port: str | None = None) -> None:
         """Update the port / connection indicator.
@@ -178,6 +181,19 @@ class StatusBar(QWidget):
         self._lbl_elapsed.setMinimumWidth(80)
         self._lbl_elapsed.setToolTip("Time spent in RUNNING state")
 
+        # Live telemetry readouts — updated on every frame.
+        self._lbl_pos: QLabel = _colored_label("+0.00 mm", _STATE_COLOR_DEFAULT)
+        self._lbl_pos.setMinimumWidth(90)
+        self._lbl_pos.setToolTip("Current encoder position")
+
+        self._lbl_vel: QLabel = _colored_label("0.00 mm/s", _STATE_COLOR_DEFAULT)
+        self._lbl_vel.setMinimumWidth(90)
+        self._lbl_vel.setToolTip("Current shaft velocity (encoder)")
+
+        self._lbl_accel: QLabel = _colored_label("0.0 mm/s²", _STATE_COLOR_DEFAULT)
+        self._lbl_accel.setMinimumWidth(95)
+        self._lbl_accel.setToolTip("Current acceleration")
+
         def _sep() -> QFrame:
             """Return a thin vertical QFrame line used as a visual separator."""
             separator: QFrame = QFrame()
@@ -192,6 +208,12 @@ class StatusBar(QWidget):
         layout.addWidget(self._lbl_phase)
         layout.addWidget(_sep())
         layout.addWidget(self._lbl_elapsed)
+        layout.addWidget(_sep())
+        layout.addWidget(self._lbl_pos)
+        layout.addWidget(_sep())
+        layout.addWidget(self._lbl_vel)
+        layout.addWidget(_sep())
+        layout.addWidget(self._lbl_accel)
         layout.addStretch()
 
     # ------------------------------------------------------------------

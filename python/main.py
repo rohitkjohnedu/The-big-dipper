@@ -43,6 +43,7 @@ import logging.handlers
 import sys
 from pathlib import Path
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
@@ -124,6 +125,10 @@ def main() -> None:
     app.setStyle("Fusion")
     app.setApplicationName("Dip Coater Control")
     app.setOrganizationName("LMTS")
+
+    icon_path: Path = Path(__file__).parent.parent / "icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     win: MainWindow = MainWindow(profile_dir=profile_dir, log_dir=log_dir)
 

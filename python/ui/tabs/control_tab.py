@@ -233,9 +233,30 @@ class ControlTab(QWidget):
             ( -5.0,  "-5 mm"),
             (-10.0, "-10 mm"),
         ]
+        _up_style = (
+            "QPushButton {"
+            "  background-color: #1565c0; color: white;"
+            "  border: none; border-radius: 6px;"
+            "  min-height: 28px; font-weight: bold;"
+            "}"
+            "QPushButton:hover   { background-color: #1976d2; }"
+            "QPushButton:pressed { background-color: #0d47a1; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
+        _down_style = (
+            "QPushButton {"
+            "  background-color: #e65100; color: white;"
+            "  border: none; border-radius: 6px;"
+            "  min-height: 28px; font-weight: bold;"
+            "}"
+            "QPushButton:hover   { background-color: #f57c00; }"
+            "QPushButton:pressed { background-color: #bf360c; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
         for dist, label in steps:
             btn = QPushButton(label)
             btn.setFixedWidth(90)
+            btn.setStyleSheet(_up_style if dist > 0 else _down_style)
             btn.setToolTip(
                 f"Move {label} using jog speed and acceleration  (READY only)"
             )
@@ -269,7 +290,7 @@ class ControlTab(QWidget):
         )
 
         self._spin_move_spd = QDoubleSpinBox()
-        self._spin_move_spd.setRange(0.1, 50.0)
+        self._spin_move_spd.setRange(0.1, 40.0)
         self._spin_move_spd.setValue(5.0)
         self._spin_move_spd.setSuffix(" mm/s")
         self._spin_move_spd.setDecimals(1)
@@ -285,6 +306,16 @@ class ControlTab(QWidget):
         self._spin_move_accel.setToolTip("Acceleration ramp for this move")
 
         self._btn_custom_move = QPushButton("Move")
+        self._btn_custom_move.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #00695c; color: white;"
+            "  border: none; border-radius: 6px;"
+            "  padding: 8px 16px; font-weight: bold; font-size: 10pt;"
+            "}"
+            "QPushButton:hover   { background-color: #00897b; }"
+            "QPushButton:pressed { background-color: #004d40; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
         self._btn_custom_move.setToolTip(
             "Execute a move with the distance, speed, and acceleration above  (READY only)"
         )
@@ -414,7 +445,7 @@ class ControlTab(QWidget):
         row.setSpacing(8)
 
         self._spin_jog_spd = QDoubleSpinBox()
-        self._spin_jog_spd.setRange(0.1, 50.0)
+        self._spin_jog_spd.setRange(0.1, 40.0)
         self._spin_jog_spd.setValue(5.0)
         self._spin_jog_spd.setSuffix(" mm/s")
         self._spin_jog_spd.setDecimals(1)
@@ -452,6 +483,33 @@ class ControlTab(QWidget):
         self._btn_run    = QPushButton("Run")
         self._btn_pause  = QPushButton("Pause")
         self._btn_resume = QPushButton("Resume")
+        self._btn_run.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #2e7d32; color: white;"
+            "  border: none; border-radius: 6px; padding: 6px 20px; font-weight: bold;"
+            "}"
+            "QPushButton:hover   { background-color: #388e3c; }"
+            "QPushButton:pressed { background-color: #1b5e20; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
+        self._btn_pause.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #f57f17; color: white;"
+            "  border: none; border-radius: 6px; padding: 6px 20px; font-weight: bold;"
+            "}"
+            "QPushButton:hover   { background-color: #f9a825; }"
+            "QPushButton:pressed { background-color: #e65100; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
+        self._btn_resume.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #1565c0; color: white;"
+            "  border: none; border-radius: 6px; padding: 6px 20px; font-weight: bold;"
+            "}"
+            "QPushButton:hover   { background-color: #1976d2; }"
+            "QPushButton:pressed { background-color: #0d47a1; }"
+            "QPushButton:disabled { background-color: #424242; color: #757575; }"
+        )
         self._btn_run.setToolTip("Execute the selected profile (READY only)")
         self._btn_pause.setToolTip("Pause mid-profile — motor decelerates to rest (RUNNING only)")
         self._btn_resume.setToolTip("Resume paused profile (PAUSED only)")

@@ -1,0 +1,3 @@
+- [ ] Add a set origin for relative position tracking.
+- [ ] A toggle in the telemetry to view relative position
+- [ ] in the bottom status bar current position, velocity acceleration, max vel and max acc
